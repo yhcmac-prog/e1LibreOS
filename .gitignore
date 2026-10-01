@@ -1,0 +1,28 @@
+# ---- 构建产物 ----
+/build/
+/dist/
+*.iso
+*.img
+
+# ---- rootfs 中由 build.sh 重新生成的编译产物 / 提取文件 ----
+/rootfs/lib/modules/
+/rootfs/srv/repo/repo.db
+/rootfs/srv/repo/*.e1.tar.gz
+/rootfs/usr/bin/e1apk
+/rootfs/usr/bin/e1wine
+/rootfs/usr/bin/e1wm
+/rootfs/usr/sbin/e1gpt
+/rootfs/usr/share/e1apk/
+/rootfs/usr/share/e1wine/
+
+# ---- 下载的上游二进制（构建时自动获取）----
+/downloads/
+/brew/
+
+# ---- 运行时 / 环境 ----
+/.vbox/
+*.log
+*.o
+*.pdb
+.DS_Store
+github_login_cookies.json

@@ -1,0 +1,59 @@
+#!/bin/sh
+# e1os-commit — diskless/data 模式下把当前配置保存到持久介质
+#
+# 扫描已挂载/可挂载的持久分区（data 模式 LABEL=E1DATA，diskless USB LABEL=E1OVL，
+# 或任意含 .boot_repository / *.apkovl.tar.gz 的 ext4/vfat 分区），写入
+# <hostname>.apkovl.tar.gz。下次启动 rc.init 会自动找到并恢复它。
+#
+# 用法: e1os-commit
+set -e
+export PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+HN=$(cat /etc/hostname 2>/dev/null || echo e1libreos)
+MNT=/run/e1os-commit
+mkdir -p "$MNT"
+
+ok() { printf '\033[32m[  OK  ]\033[0m %s\n' "$*"; }
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# $1=设备  返回 0 并在全局 DST 给出目录（介质挂载根）
+try_disk() {
+    dev="$1"; DST=""
+    for fs in ext4 vfat; do
+        if mount -t "$fs" "$dev" "$MNT" 2>/dev/null; then
+            if [ -d "$MNT/.boot_repository" ]; then DST="$MNT/.boot_repository"; return 0; fi
+            if ls "$MNT"/*.apkovl.tar.gz >/dev/null 2>&1; then DST="$MNT"; return 0; fi
+            # E1DATA/E1OVL 标签盘即使首次使用也接受
+            lbl=$(blkid "$dev" 2>/dev/null | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p')
+            case "$lbl" in E1DATA|E1OVL)
+                mkdir -p "$MNT/.boot_repository"; DST="$MNT/.boot_repository"; return 0 ;;
+            esac
+            umount "$MNT" 2>/dev/null
+        fi
+    done
+    return 1
+}
+
+TARGET=""
+TDEV=""
+for d in /sys/block/*; do
+    b=$(basename "$d")
+    case "$b" in loop*|ram*|sr*|fd*) continue ;; esac
+    for p in "$d"/"$b"?*; do
+        [ -e "$p" ] || continue
+        dev="/dev/$(basename "$p")"
+        [ -b "$dev" ] || continue
+        if try_disk "$dev"; then TARGET="$DST"; TDEV="$dev"; break 2; fi
+    done
+done
+
+[ -n "$TARGET" ] || die "no persistent disk found (label it E1DATA or E1OVL, or run setup-e1os in data/diskless mode)"
+
+# 刷新 apk 世界清单
+apk info --installed 2>/dev/null | sort -u > /etc/apk/world || true
+
+out="$TARGET/$HN.apkovl.tar.gz"
+echo "==> Writing $out on $TDEV"
+tar czf "$out" -C / etc root home $( [ -d /usr/local ] && echo usr/local ) 2>/dev/null
+sync
+umount "$MNT" 2>/dev/null || true
+ok "Configuration committed ($(du -h "$out" 2>/dev/null | cut -f1 || echo saved))"

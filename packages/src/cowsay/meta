@@ -1,0 +1,4 @@
+name=cowsay
+version=1.0
+summary=ASCII cow that says things (pure shell)
+depends=

@@ -1,0 +1,147 @@
+#!/bin/sh
+# /etc/rc.init — e1LibreOS 系统初始化（Fedora 风格彩色启动输出）
+
+export PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+
+echo "rc.init: ttyS0 test" >/dev/ttyS0 2>&1
+
+# —— 输出辅助：Fedora 风格的 [  OK ] ——
+ok()   { printf '\033[32m[  OK  ]\033[0m %s\n' "$*"; }
+fail() { printf '\033[31m[FAILED]\033[0m %s\n' "$*"; }
+
+echo ""
+echo -e "\033[34m      ___    ____  _____ _    __  __ ___    ____"
+echo -e '     |__ \  |  _ \| ____| |   \ \/ /|__ \  |  _ \'
+echo -e '      __) | | |_) |  _| | |    \  /   / /  | |_) |'
+echo -e '     |__ <  |  _ <| |___| |___ /  \  / /_  |  _ <'
+echo -e '     |___/  |_| \_\_____|_____/_/\_\/____| |_| \_\033[0m'
+echo ""
+echo -e "\033[1m e1LibreOS 1.0 (Libre)\033[0m — a brand-new, freedom-first minimal Linux distro"
+echo ""
+
+# ---- Live 环境驱动模块（磁盘/网卡/文件系统/USB 存储）----
+if [ -d "/lib/modules/$(uname -r)" ]; then
+    for m in af_packet virtio_pci virtio_blk virtio_scsi sd_mod usb-storage \
+             virtio_net net_failover e1000 \
+             ext2 ext4 fat vfat nls_cp437 nls_iso8859-1 crc32c_generic; do
+        modprobe "$m" 2>/dev/null
+    done
+fi
+
+# ================================================================ 本地备份恢复
+# diskless/data 模式：扫描含 .boot_repository/*.apkovl.tar.gz（或根目录 apkovl）
+# 的 ext4/vfat 分区，把配置叠加层解开到内存根。必须在 hostname/网络等配置之前。
+restore_overlay() {
+    mkdir -p /run/ovl
+    found=""
+    # /proc/partitions 第 4 列是分区名（整盘名不含数字，跳过）
+    for name in $(awk '$3 ~ /^[0-9]+$/ && $4 ~ /[0-9]/ {print $4}' /proc/partitions 2>/dev/null); do
+        case "$name" in loop*|ram*|sr*|fd*) continue ;; esac
+        dev="/dev/$name"
+        [ -b "$dev" ] || continue
+        if mount -t ext4 "$dev" /run/ovl 2>/dev/null || mount -t vfat "$dev" /run/ovl 2>/dev/null; then
+            ovl=""
+            for f in /run/ovl/.boot_repository/*.apkovl.tar.gz; do
+                [ -f "$f" ] && { ovl="$f"; break; }
+            done
+            [ -z "$ovl" ] && for f in /run/ovl/*.apkovl.tar.gz; do
+                [ -f "$f" ] && { ovl="$f"; break; }
+            done
+            if [ -n "$ovl" ]; then found="$ovl"; break; fi
+            umount /run/ovl 2>/dev/null
+        fi
+    done
+    if [ -n "$found" ]; then
+        echo "Restoring local configuration overlay: $found"
+        if tar xzf "$found" -C / 2>/dev/null; then
+            ok "Configuration overlay restored"
+        else
+            fail "overlay restore failed (corrupt archive?)"
+        fi
+        umount /run/ovl 2>/dev/null
+        # fstab 里的持久挂载（data 模式 LABEL=E1DATA -> /var）与 swap
+        for lbl in $(awk '$2!="/" && $2!="swap" && $1 ~ /^LABEL=/ {sub(/^LABEL=/,"",$1); print $1}' /etc/fstab 2>/dev/null); do
+            d=$(blkid -L "$lbl" 2>/dev/null)
+            [ -n "$d" ] && mt=$(awk -v l="$lbl" '$1=="LABEL="l {print $2}' /etc/fstab) && {
+                mkdir -p "$mt"; mount "$d" "$mt" 2>/dev/null && ok "Mounted $lbl ($d) -> $mt"
+            }
+        done
+        mount -a 2>/dev/null || true
+        swapon -a 2>/dev/null && ok "Swap enabled" || true
+    fi
+}
+restore_overlay
+
+hostname -F /etc/hostname 2>/dev/null && ok "Set hostname"
+mount -o remount,rw / 2>/dev/null
+mount -t tmpfs tmpfs /tmp && ok "Mount /tmp (tmpfs)"
+
+mkdir -p /var/lib/e1pkg/installed /var/cache/e1pkg /run/lock
+chmod 1777 /tmp /var/tmp 2>/dev/null
+ok "Initialize e1pkg directories"
+
+ip link set lo up 2>/dev/null || ifconfig lo up 2>/dev/null
+ok "Bring up loopback interface"
+
+# ---- 按 /etc/network/interfaces 恢复网络（磁盘/diskless 通用，单 NIC 简化）----
+replay_network() {
+    [ -f /etc/network/interfaces ] || return 0
+    nic=$(awk '/^auto /{print $2}' /etc/network/interfaces | grep -v '^lo$' | head -n 1)
+    [ -n "$nic" ] || return 0
+    method=$(awk -v n="$nic" '$1=="iface" && $2==n {print $4; exit}' /etc/network/interfaces)
+    ip link set "$nic" up 2>/dev/null || ifconfig "$nic" up 2>/dev/null
+    case "$method" in
+        dhcp)
+            timeout 30 udhcpc -i "$nic" -n -q -t 6 -T 3 -s /etc/udhcpc.script 2>/dev/null \
+                && ok "Network: $nic via DHCP" || fail "DHCP on $nic"
+            ;;
+        static)
+            addr=$(awk -v n="$nic" '$1=="address" && found {print $2; exit} $2==n {found=1}' /etc/network/interfaces)
+            nm=$(awk '/^[[:space:]]*netmask /{print $2; exit}' /etc/network/interfaces)
+            gw=$(awk '/^[[:space:]]*gateway /{print $2; exit}' /etc/network/interfaces)
+            ifconfig "$nic" "$addr" netmask "${nm:-255.255.255.0}" up 2>/dev/null
+            [ -n "$gw" ] && route add default gw "$gw" "$nic" 2>/dev/null
+            ok "Network: $nic static $addr"
+            ;;
+    esac
+}
+# Live 默认无 /etc/network/interfaces（恢复了 apkovl 或已安装磁盘系统才存在）
+if [ -f /etc/network/interfaces ]; then
+    replay_network
+elif ! route -n 2>/dev/null | grep -q '^0\.0\.0\.0'; then
+    # Live 默认：第一个有线网卡直接 DHCP
+    for n in /sys/class/net/*; do
+        b=$(basename "$n"); case "$b" in lo) continue ;; esac
+        ifconfig "$b" up 2>/dev/null
+        timeout 25 udhcpc -i "$b" -n -q -t 5 -T 3 -s /etc/udhcpc.script 2>/dev/null \
+            && ok "Network: $b via DHCP (Live default)"
+        break
+    done
+fi
+
+# diskless：从本地缓存/网络恢复 apkovl 中记录的 apk 世界软件包（失败不阻塞启动）
+if [ -x /usr/local/bin/apk.static ] && [ -s /etc/apk/world ] && [ -f /etc/apk/repositories ]; then
+    ( timeout 120 /usr/local/bin/apk.static -U --allow-untrusted --root / add $(cat /etc/apk/world) >/dev/null 2>&1 \
+        && ok "apk world restored from cache/network" ) &
+fi
+
+# workstation 图形栈：simpledrm 提供 /dev/fb0
+if [ -f "/lib/modules/$(uname -r)/kernel/drivers/gpu/drm/tiny/simpledrm.ko" ]; then
+    if modprobe simpledrm 2>/dev/null; then
+        ok "Load module: simpledrm (framebuffer)"
+    else
+        fail "Load module: simpledrm (framebuffer)"
+    fi
+    for m in evdev ehci-hcd ehci-pci ohci-hcd ohci-pci uhci-hcd psmouse usbhid hid-generic; do
+        modprobe "$m" 2>/dev/null && ok "Load module: $m (mouse)"
+    done
+fi
+
+# 本机软件仓库（随系统内置，位于内存盘）
+ok "Local repository ready at /srv/repo"
+
+dmesg >/var/log/dmesg.boot 2>/dev/null
+ok "Save boot log to /var/log/dmesg.boot"
+
+echo ""
+echo -e "\033[1m[ e1LibreOS 1.0 (Libre) ] reached target — multi-user\033[0m"

@@ -1,0 +1,4 @@
+name=e1fetch
+version=1.0
+summary=Show system info (depends on cowsay)
+depends=cowsay

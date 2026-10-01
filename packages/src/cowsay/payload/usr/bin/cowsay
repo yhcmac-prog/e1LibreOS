@@ -1,0 +1,39 @@
+#!/bin/sh
+# cowsay — 纯 shell 版（busybox ash 兼容）
+msg="${*:-Moo! e1LibreOS!}"
+# 按 38 列折行
+lines=$(echo "$msg" | fold -s -w 38)
+maxw=0
+for l in $lines; do
+    w=$(echo -n "$l" | wc -c)
+    [ "$w" -gt "$maxw" ] && maxw=$w
+done
+[ "$maxw" -eq 0 ] && maxw=1
+
+pad() { n=$1; i=0; while [ $i -lt $n ]; do printf ' '; i=$((i+1)); done; }
+
+printf ' '
+i=0; while [ $i -lt $((maxw + 2)) ]; do printf '_'; i=$((i+1)); done
+echo ""
+first=1
+echo "$msg" | fold -s -w 38 | while IFS= read -r l; do
+    w=$(echo -n "$l" | wc -c)
+    if [ "$first" -eq 1 ] && [ "$(echo "$msg" | fold -s -w 38 | wc -l)" -eq 1 ]; then
+        printf '< %s %s>\n' "$l" "$(pad $((maxw - w)))"
+    elif [ "$first" -eq 1 ]; then
+        printf '/ %s %s\\\n' "$l" "$(pad $((maxw - w)))"
+    else
+        printf '| %s %s|\n' "$l" "$(pad $((maxw - w)))"
+    fi
+    first=0
+done
+printf ' '
+i=0; while [ $i -lt $((maxw + 2)) ]; do printf '-'; i=$((i+1)); done
+echo ""
+cat <<'COW'
+        \   ^__^
+         \  (oo)\_______
+            (__)\       )\/\
+                ||----w |
+                ||     ||
+COW

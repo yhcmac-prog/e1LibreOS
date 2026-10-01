@@ -1,0 +1,19 @@
+#!/bin/sh
+# /etc/udhcpc.script — busybox udhcpc 事件脚本
+# 用法: udhcpc -i eth0 -s /etc/udhcpc.script
+
+case "$1" in
+    deconfig)
+        ip addr flush dev "$interface"
+        ;;
+    bound|renew)
+        ip addr add "$ip/${subnet:-255.255.255.0}" dev "$interface" 2>/dev/null
+        ip link set "$interface" up
+        [ -n "$router" ] && ip route add default via "${router%% *}" 2>/dev/null
+        if [ -n "$dns" ]; then
+            : > /etc/resolv.conf
+            for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done
+        fi
+        ;;
+esac
+exit 0

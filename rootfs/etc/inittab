@@ -1,0 +1,16 @@
+# /etc/inittab — busybox init 配置（e1LibreOS）
+# 开机初始化脚本
+::sysinit:/etc/rc.init
+
+# 开机一次性演示：验证 e1pkg 依赖解析 / 安装 / 卸载
+::once:/usr/bin/e1demo
+
+# 控制台自动登录（Live 模式，仿 Fedora Workstation Live）
+tty1::respawn:/sbin/getty -n -l /bin/autologin 38400 tty1
+ttyS0::respawn:/sbin/getty -L -n -l /bin/autologin 115200 ttyS0 vt100
+
+# Ctrl-Alt-Del 重启
+::ctrlaltdel:/sbin/reboot
+
+# 关机/重启前执行
+::shutdown:/etc/rc.shutdown

@@ -1,0 +1,5 @@
+#!/bin/sh
+# /etc/rc.shutdown — 关机/重启前清理
+ok() { printf '\033[32m[  OK  ]\033[0m %s\n' "$*"; }
+ok "Stopping e1LibreOS services"
+sync

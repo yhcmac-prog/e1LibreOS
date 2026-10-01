@@ -1,0 +1,11 @@
+NAME="e1LibreOS"
+VERSION="1.0 (Libre)"
+ID=e1libreos
+VERSION_ID="1.0"
+VERSION_CODENAME="libre"
+PRETTY_NAME="e1LibreOS 1.0 (Libre)"
+ANSI_COLOR="0;34"
+LOGO=fedora-logo-icon
+HOME_URL="https://e1libreos.example.org"
+SUPPORT_URL="https://e1libreos.example.org/support"
+BUG_REPORT_URL="https://e1libreos.example.org/bugzilla"

@@ -1,0 +1,4 @@
+name=hello
+version=1.0
+summary=Official greeting program for e1LibreOS
+depends=

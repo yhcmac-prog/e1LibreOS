@@ -1,0 +1,4 @@
+#!/bin/sh
+# hello — e1LibreOS 问候程序
+echo "Hello from e1LibreOS 1.0 (Libre)!"
+echo "This package was installed by e1pkg. Try: e1pkg remove hello"

@@ -1,0 +1,5 @@
+root::0:
+daemon:x:1:
+bin:x:2:
+users:x:100:
+nogroup:x:65534:

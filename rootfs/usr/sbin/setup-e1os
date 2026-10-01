@@ -1,0 +1,1180 @@
+#!/bin/sh
+# setup-e1os — e1LibreOS 安装器（问答与 setup-alpine 逐项对齐）
+#
+# 支持的安装模式（磁盘问答后的 "How would you like to use it?"）：
+#   sys       传统整盘安装（BIOS: MBR+ext4+extlinux；UEFI: GPT+ESP+GRUB）
+#   data      数据盘模式（diskless 运行 + 数据盘持久化 /var、apk 缓存与配置）
+#   custom    挂载点分配模式（GPT，必选 / 与 /boot/efi，推荐 /home 与 swap）
+#   preserve  保留现有操作系统（不动其它分区，GRUB 链式引导共存系统）
+#   none      无盘模式（系统在内存中运行，lbu 风格 .apkovl 持久化配置）
+#
+# 用法:
+#   setup-e1os                         交互式安装
+#   setup-e1os --auto [选项] [/dev/vda] 非交互（GUI 安装器/自动化）
+#
+# --auto 可用预置环境变量（未列出的取安全默认值）:
+#   HOSTNAME KEYMAP KEYMAP_VARIANT NIC IPADDR NETMASK GATEWAY DNSNS SEARCHDOMAIN
+#   ROOTPASS TIMEZONE PROXY_URL NTPCLIENT MIRROR_PICK(f=最快) USERNAME USERPASS
+#   SSHD SSH_ROOT DISKS DISKMODE(sys|data|custom|preserve)
+#   ESP_MB ROOT_MB HOME_MB SWAP_MB FIRMWARE(efi|bios) LBU_MEDIA(usb|data|none)
+#   ERASE_DISKS（兼容旧变量：等同 DISKS 且确认抹除）
+#
+# 注意：VGA 文本控制台无 CJK 字形，用户可见输出一律英文。
+
+set -e
+export PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+
+# ---------------------------------------------------------------- 全局变量
+E1REPO_HOSTS="${E1REPO_HOSTS:-http://10.0.2.2:8000 http://192.168.1.102:8000}"
+MIRROR_ALI="http://mirrors.aliyun.com/alpine/v3.21"
+MIRROR_CDN="http://dl-cdn.alpinelinux.org/alpine/v3.21"
+
+case "$(uname -m)" in
+    x86_64|amd64) ARCH=x86_64 ;;
+    aarch64|arm64) ARCH=aarch64 ;;
+    *) ARCH=$(uname -m) ;;
+esac
+
+# 固件检测（可用 FIRMWARE=efi|bios 或 --firmware 覆盖）
+if [ -d /sys/firmware/efi ]; then FW_AUTO=efi; else FW_AUTO=bios; fi
+FIRMWARE="${FIRMWARE:-$FW_AUTO}"
+
+MNT=/mnt/e1os-target
+WORK=/tmp/e1os-setup
+REPOBASE=""      # probe_repo 选定（.../v3.21，不含 /main/$ARCH）
+REPO_LABEL=""
+
+AUTO=0
+DISK=""
+PROFILE="${PROFILE:-}"
+HN=""
+ROOTPASS="${ROOTPASS:-}"
+KEYMAP="${KEYMAP:-}"; KVAR="${KEYMAP_VARIANT:-}"
+NIC="${NIC:-}"; IPADDR="${IPADDR:-}"; NETMASK="${NETMASK:-}"; GATEWAY="${GATEWAY:-}"
+DNSNS="${DNSNS:-}"; DNSDOMAIN="${SEARCHDOMAIN:-}"
+TZ="${TIMEZONE:-}"; PROXY_URL="${PROXY_URL:-}"
+NTPC="${NTPCLIENT:-}"; MIRROR_PICK="${MIRROR_PICK:-}"
+SYSUSER="${USERNAME:-}"; USERGECOS="${USERGECOS:-}"; USERPASS="${USERPASS:-}"
+SSHD="${SSHD:-}"; SSHROOT="${SSH_ROOT:-}"; SSHKEY="${SSH_KEY:-}"
+DISKMODE="${DISKMODE:-}"
+ESPMB="${ESP_MB:-}"; ROOTMB="${ROOT_MB:-}"; HOMEMB="${HOME_MB:-}"; SWAPMB="${SWAP_MB:-}"
+LBUMEDIA="${LBU_MEDIA:-}"
+# 分区结果
+P_ROOT=""; P_ESP=""; P_HOME=""; P_SWAP=""; P_BIOSBOOT=""
+# preserve 模式选择的既有分区
+PV_ROOT=""; PV_ESP=""; PV_HOME=""; PV_SWAP=""
+
+ok()   { printf '\033[32m[  OK  ]\033[0m %s\n' "$*" >&2; }
+step() { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+info() { printf ' %s\n' "$*" >&2; }
+
+default_profile() {
+    p=$(sed -n 's/^VARIANT_ID=//p' /etc/os-release 2>/dev/null || true)
+    case "$p" in workstation|mobile) echo workstation ;; *) echo server ;; esac
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --auto)     AUTO=1 ;;
+        --profile)  PROFILE="$2"; shift ;;
+        --firmware) FIRMWARE="$2"; shift ;;
+        --mode)     DISKMODE="$2"; shift ;;
+        -h|--help|help) sed -n '2,28p' "$0"; exit 0 ;;
+        *)          DISK="$1" ;;
+    esac
+    shift
+done
+[ "$(id -u)" = 0 ] || die "please run as root"
+case "$FIRMWARE" in efi|bios) ;; *) die "firmware must be efi or bios" ;; esac
+
+# ---------------------------------------------------------------- 问答辅助
+ask() { # $1=提示 $2=默认值 $3=变量名
+    _a=""
+    printf '%s [%s]: ' "$1" "$2" >&2
+    read -r _a || _a=""
+    eval "$3=\${_a:-$2}"
+}
+ask_required() { # $1=提示 $2=变量名（不允许空）
+    _a=""
+    while [ -z "$_a" ]; do
+        printf '%s: ' "$1" >&2; read -r _a || _a=""
+        [ -n "$_a" ] || echo "  (required, please enter a value)" >&2
+    done
+    eval "$2=\$_a"
+}
+ask_passwd() { # $1=要写入的密码变量名
+    _p1=x; _p2=y
+    while [ "$_p1" != "$_p2" ] || [ -z "$_p1" ]; do
+        printf 'New password: ' >&2; stty -echo 2>/dev/null || true
+        read -r _p1 || _p1=""; echo >&2
+        printf 'Retype password: ' >&2
+        read -r _p2 || _p2=""; echo >&2
+        stty sane 2>/dev/null || true
+        [ "$_p1" = "$_p2" ] || echo "Passwords did not match, try again." >&2
+        [ -n "$_p1" ] || echo "Password must not be empty." >&2
+    done
+    eval "$1=\$_p1"
+}
+ask_yesno() { # $1=提示 $2=默认 y/n $3=变量名
+    ask "$1 (y/n)" "$2" _yn
+    case "$_yn" in y|Y|yes|YES) eval "$3=y" ;; *) eval "$3=n" ;; esac
+}
+
+list_nics() {
+    for n in /sys/class/net/*; do
+        b=$(basename "$n"); [ "$b" = lo ] && continue
+        echo "$b"
+    done
+}
+default_nic() {
+    list_nics | grep -qx eth0 && echo eth0 || list_nics | head -n 1
+}
+
+# ---------------------------------------------------------------- --auto 默认值
+if [ "$AUTO" = 1 ]; then
+    [ -n "$PROFILE" ] || PROFILE=$(default_profile)
+    HN="${HOSTNAME:-e1libreos}"
+    ROOTPASS="${ROOTPASS:-e1os}"
+    KEYMAP="${KEYMAP:-none}"; KVAR="${KVAR:-$KEYMAP}"
+    NIC="${NIC:-$(default_nic)}"; IPADDR="${IPADDR:-dhcp}"
+    TZ="${TZ:-UTC}"; PROXY_URL="${PROXY_URL:-none}"; NTPC="${NTPC:-chrony}"
+    MIRROR_PICK="${MIRROR_PICK:-1}"
+    SYSUSER="${SYSUSER:-no}"; USERPASS="${USERPASS:-e1os}"
+    SSHD="${SSHD:-openssh}"; SSHROOT="${SSHROOT:-prohibit-password}"
+    [ -n "$DISKMODE" ] || DISKMODE=sys
+    ESPMB="${ESPMB:-512}"; ROOTMB="${ROOTMB:-0}"
+    HOMEMB="${HOMEMB:-0}"
+    [ -n "$SWAPMB" ] || SWAPMB=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+    LBUMEDIA="${LBUMEDIA:-none}"
+    if [ -z "$DISK" ] && [ -n "$ERASE_DISKS" ]; then DISK="$ERASE_DISKS"; fi
+    if [ -z "$DISK" ] && [ "$DISKMODE" != none ] && [ "$LBUMEDIA" = none ]; then
+        for d in /dev/vda /dev/sda; do [ -b "$d" ] && { DISK="$d"; break; }; done
+    fi
+fi
+
+# ================================================================ 交互问答（与 setup-alpine 对齐）
+if [ "$AUTO" != 1 ]; then
+    echo "Welcome to e1LibreOS!  The setup-alpine-compatible installer will guide you"
+    echo "through the system configuration. Press ^C at any prompt to abort."
+    echo ""
+
+    # ---- 键盘布局（setup-keymap 同款两问）
+    echo "Available keyboard layouts: us gb de fr es it pt br ru cn ... ('?' lists more)"
+    ask "Select keyboard layout" "none" KEYMAP
+    if [ "$KEYMAP" = "?" ]; then
+        echo "us gb de fr es it pt nl be ch se no dk fi pl cz hu hr sk si ro bg ru ua tr cn jp kr"
+        ask "Select keyboard layout" "none" KEYMAP
+    fi
+    [ "$KEYMAP" = none ] && KVAR=none || ask "Select variant" "$KEYMAP" KVAR
+    ok "Keyboard: $KEYMAP/$KVAR"
+
+    # ---- 主机名
+    ask "Enter system hostname (fully qualified form, e.g. 'foo.example.com')" "localhost" HN
+    ok "Hostname: $HN"
+
+    # ---- 网卡（setup-interfaces 同款）
+    DEF_NIC=$(default_nic)
+    if [ -n "$DEF_NIC" ]; then
+        while :; do
+            ask "Which one do you want to initialize? (or '?' or 'done')" "$DEF_NIC" NIC
+            case "$NIC" in
+                '?') echo "Available interfaces:"; list_nics | sed 's/^/  /' ;;
+                done|"") NIC=done; break ;;
+                $(list_nics)) break ;;
+                *) echo "  no such interface: $NIC" ;;
+            esac
+        done
+        if [ "$NIC" != done ]; then
+            ask "Ip address for $NIC? (or 'dhcp', 'none', '?')" "dhcp" IPADDR
+            case "$IPADDR" in
+                dhcp|'?'|none) IPADDR=dhcp ;;
+                *)
+                    ask "Netmask?" "255.255.255.0" NETMASK
+                    ask "Gateway? (e.g. 192.168.1.1, or 'none')" "none" GATEWAY
+                    ;;
+            esac
+            ask_yn "Do you want to do any manual network configuration? (DNS)" "no" MANDNS
+            if [ "$MANDNS" = y ]; then
+                ask "DNS nameserver(s), space separated" "1.1.1.1" DNSNS
+                ask "DNS search domain (or 'none')" "none" DNSDOMAIN
+            fi
+        fi
+    else
+        NIC=done; IPADDR=none
+        echo "No network interface found; continuing (network installs will fail)."
+    fi
+
+    # ---- root 密码（setup-alpine 同款两问，无默认密码）
+    ask_passwd ROOTPASS
+    ok "Root password set"
+
+    # ---- 时区
+    ask "Which timezone are you in? ('?' for list)" "UTC" TZ
+    [ "$TZ" = "?" ] && { TZ="UTC"; echo "Examples: Asia/Shanghai UTC Europe/London America/New_York"; }
+
+    # ---- 代理
+    ask "HTTP/FTP proxy URL? (e.g. 'http://proxy.example.com:8080', or 'none')" "none" PROXY_URL
+
+    # ---- NTP 客户端
+    ask "Which NTP client to run? ('busybox', 'openntpd', 'chrony' or 'none')" "chrony" NTPC
+
+    # ---- 安装类型（e1LibreOS 扩展问答）
+    if [ -z "$PROFILE" ]; then
+        dp=$(default_profile)
+        ask "Install type [1] Server (CLI)  [2] Workstation (GUI e1wm)" \
+            "$( [ "$dp" = workstation ] && echo 2 || echo 1)" PTYP
+        case "$PTYP" in 2*) PROFILE=workstation ;; *) PROFILE=server ;; esac
+    fi
+
+    # ---- 镜像源
+    echo ""
+    echo "Available apk mirrors:"
+    echo "  1) e1repo dependency repository (local/VirtualBox host, automatic fallback)"
+    echo "  2) mirrors.aliyun.com  (Alpine v3.21)"
+    echo "  3) dl-cdn.alpinelinux.org"
+    echo "  f) detect fastest"
+    ask "Enter mirror number or URL" "1" MIRROR_PICK
+
+    # ---- 用户（setup-alpine 同款）
+    ask "Setup a user? (enter a lower-case loginname, or 'no')" "no" SYSUSER
+    if [ "$SYSUSER" != no ] && [ -n "$SYSUSER" ]; then
+        ask "Full name for user $SYSUSER" "$SYSUSER" USERGECOS
+        ask_passwd USERPASS
+        ask "Enter ssh key or URL for $SYSUSER (or 'none')" "none" USERKEY
+    fi
+
+    # ---- SSH
+    ask "Which SSH server? ('openssh', 'dropbear' or 'none')" "openssh" SSHD
+    if [ "$SSHD" != none ]; then
+        ask "Allow root ssh login? ('yes' 'prohibit-password' 'no', '?' for help)" \
+            "prohibit-password" SSHROOT
+        ask "Enter ssh key or URL for root (or 'none')" "none" SSHKEY
+    fi
+fi
+case "$PROFILE" in server|workstation) ;; *) die "unknown profile: $PROFILE" ;; esac
+[ "$GATEWAY" = none ] && GATEWAY=""
+[ "$DNSDOMAIN" = none ] && DNSDOMAIN=""
+[ "$PROXY_URL" = none ] && PROXY_URL=""
+
+# ---------------------------------------------------------------- 内核/引导参数
+if [ "$PROFILE" = workstation ]; then
+    KERNPKG=linux-lts; KERN=vmlinuz-lts; INITRD=initramfs-lts; KVERPAT='-lts$'
+else
+    KERNPKG=linux-virt; KERN=vmlinuz-virt; INITRD=initramfs-virt; KVERPAT='^[0-9]'
+fi
+if [ "$ARCH" = aarch64 ]; then
+    GRUB_EFI_TARGET=arm64-efi; EFI_BOOTNAME=BOOTAA64.EFI; CONSOLES="console=tty0 console=ttyAMA0,115200"
+else
+    GRUB_EFI_TARGET=x86_64-efi; EFI_BOOTNAME=BOOTX64.EFI; CONSOLES="console=tty0 console=ttyS0,115200"
+fi
+
+# ---------------------------------------------------------------- 网络生效
+apply_live_network() {
+    if [ "$NIC" != done ] && [ -n "$NIC" ]; then
+        if route -n 2>/dev/null | grep -q '^0\.0\.0\.0'; then
+            ok "network already configured"
+        elif [ "$IPADDR" = dhcp ]; then
+            step "Starting DHCP on $NIC..."
+            ifconfig "$NIC" up 2>/dev/null || ip link set "$NIC" up
+            timeout 30 udhcpc -i "$NIC" -n -q -t 6 -T 3 -s /etc/udhcpc.script \
+                || die "DHCP failed on $NIC"
+            ok "network configured via DHCP"
+        else
+            step "Configuring static address $IPADDR on $NIC"
+            ifconfig "$NIC" "$IPADDR" netmask "${NETMASK:-255.255.255.0}" up
+            [ -n "$GATEWAY" ] && route add default gw "$GATEWAY" "$NIC"
+            [ -n "$DNSNS" ] && write_resolv /
+            ok "static network configured"
+        fi
+    fi
+}
+write_resolv() { # $1=目标根（磁盘安装为 $MNT）
+    [ -n "$DNSNS" ] || return 0
+    {
+        for ns in $DNSNS; do echo "nameserver $ns"; done
+        [ -n "$DNSDOMAIN" ] && echo "search $DNSDOMAIN"
+        true
+    } > "$1/etc/resolv.conf"
+}
+
+# ---------------------------------------------------------------- 软件源探测
+url_ok() { wget -q -T 6 -O /dev/null "$1" 2>/dev/null; }
+probe_base() { # $1=base
+    url_ok "$1/main/$ARCH/APKINDEX.tar.gz"
+}
+probe_repo() {
+    case "$MIRROR_PICK" in
+        2*) if probe_base "$MIRROR_ALI"; then REPOBASE="$MIRROR_ALI"; REPO_LABEL="mirrors.aliyun.com"; return 0; fi ;;
+        3*) if probe_base "$MIRROR_CDN"; then REPOBASE="$MIRROR_CDN"; REPO_LABEL="dl-cdn.alpinelinux.org"; return 0; fi ;;
+        f*)
+            best=""; bestms=99999
+            for m in "$MIRROR_ALI" "$MIRROR_CDN"; do
+                t0=$(date +%s)
+                if probe_base "$m"; then
+                    t1=$(date +%s); d=$(( (t1 - t0) ))
+                    info "  $m -> ${d}s"
+                    if [ "$d" -lt "$bestms" ]; then bestms=$d; best=$m; fi
+                fi
+            done
+            if [ -n "$best" ]; then REPOBASE="$best"; REPO_LABEL="fastest:$best"; return 0; fi
+            ;;
+        *)  # 1 或未设置：e1repo 优先，随后公共镜像兜底
+            for h in $E1REPO_HOSTS; do
+                b="$h/e1repo/apk/v3.21"
+                if probe_base "$b"; then REPOBASE="$b"; REPO_LABEL="e1repo ($h)"; return 0; fi
+            done
+            ;;
+    esac
+    # 兜底链（任何选择最终不可达时）
+    for m in "$MIRROR_ALI" "$MIRROR_CDN"; do
+        if probe_base "$m"; then REPOBASE="$m"; REPO_LABEL="fallback $m"; return 0; fi
+    done
+    return 1
+}
+
+write_repositories() { # $1=目标根
+    mkdir -p "$1/etc/apk"
+    {
+        echo "$REPOBASE/main"
+        echo "$REPOBASE/community"
+    } > "$1/etc/apk/repositories"
+}
+
+fetch_apk_static() {
+    [ -x "$WORK/sbin/apk.static" ] && return 0
+    step "Downloading apk.static (Alpine static package manager)"
+    mkdir -p "$WORK"
+    apkfile=$(wget -qO- "$REPOBASE/main/$ARCH/" \
+        | grep -o 'apk-tools-static-[0-9][^"]*\.apk' | sort | tail -n 1)
+    [ -n "$apkfile" ] || die "apk-tools-static not found on $REPOBASE"
+    wget -qO "$WORK/apk.apk" "$REPOBASE/main/$ARCH/$apkfile" || die "apk-tools-static download failed"
+    tar -xzf "$WORK/apk.apk" -C "$WORK"
+    [ -x "$WORK/sbin/apk.static" ] || die "apk.static extraction failed"
+}
+apk_add() { # $1=root 其余=包名
+    r="$1"; shift
+    fetch_apk_static
+    "$WORK/sbin/apk.static" --arch "$ARCH" -U --allow-untrusted \
+        --root "$r" --initdb add "$@"
+}
+
+# ---------------------------------------------------------------- 磁盘列表
+list_disks() {
+    for d in /sys/block/*/device; do
+        b=$(basename "$(dirname "$d")")
+        case "$b" in loop*|ram*|sr*|fd*) continue ;; esac
+        sz=$(( $(cat "/sys/block/$b/size") / 2048 ))
+        printf '  /dev/%-8s %6d MB\n' "$b" "$sz"
+    done
+}
+disk_mb() { echo $(( $(cat "/sys/block/$(basename "$1")/size") / 2048 )); }
+norm_disk() {
+    case "$1" in
+        /dev/*) echo "$1" ;;
+        "") echo "" ;;
+        *) echo "/dev/$1" ;;
+    esac
+}
+wait_part() { # 等待分区节点出现
+    p="$1"; i=0
+    blockdev --rereadpt "$DISK" 2>/dev/null || true
+    mdev -s 2>/dev/null || true
+    while [ "$i" -lt 8 ] && [ ! -b "$p" ]; do
+        sleep 1; i=$((i+1)); mdev -s 2>/dev/null || true
+    done
+    [ -b "$p" ] || die "partition node $p did not appear"
+}
+
+# ---------------------------------------------------------------- MBR(sys-bios 沿用已验证方案)
+u32le() {
+    o1=$(printf '%03o' $(( $1 & 255 ))); o2=$(printf '%03o' $(( ($1 >> 8) & 255 )))
+    o3=$(printf '%03o' $(( ($1 >> 16) & 255 ))); o4=$(printf '%03o' $(( ($1 >> 24) & 255 )))
+    printf "\\$o1\\$o2\\$o3\\$o4"
+}
+part_mbr_single() {
+    total=$(cat "/sys/block/$(basename "$DISK")/size") || die "failed to read disk size"
+    psize=$(( total - 2048 )); [ "$psize" -gt 0 ] || die "disk too small"
+    step "Writing MBR partition table to $DISK"
+    dd if=/dev/zero of="$DISK" bs=512 count=2048 status=none
+    { printf '\200\376\377\377\203\376\377\377'; u32le 2048; u32le "$psize"; } \
+        | dd of="$DISK" bs=1 seek=446 conv=notrunc status=none
+    printf '\125\252' | dd of="$DISK" bs=1 seek=510 conv=notrunc status=none
+    P_ROOT="${DISK}1"
+    wait_part "$P_ROOT"
+    ok "Partition created: $P_ROOT ($(( psize / 2048 )) MB)"
+}
+
+# ---------------------------------------------------------------- GPT（e1gpt）
+# 角色顺序参数 -> 分区节点。角色: esp biosboot home swap root
+run_e1gpt() {
+    [ -x /usr/sbin/e1gpt ] || die "/usr/sbin/e1gpt missing (rebuild Live media)"
+    # $1=磁盘 $2..=角色:大小MiB（大小 0 的 linux 取剩余空间，必须是 root）
+    d="$1"; shift
+    specs=""; roles=""
+    while [ $# -gt 0 ]; do
+        role="${1%%:*}"; sz="${1#*:}"
+        case "$role" in
+            esp) gtype=esp ;;
+            biosboot) gtype=biosboot ;;
+            home|root) gtype=linux ;;
+            swap) gtype=swap ;;
+            *) die "run_e1gpt: bad role $role" ;;
+        esac
+        specs="$specs $gtype:$sz"; roles="$roles $role"
+        shift
+    done
+    step "Creating GPT partitions on $d ($specs)"
+    mkdir -p "$WORK"
+    dd if=/dev/zero of="$d" bs=512 count=34 status=none
+    # shellcheck disable=SC2086
+    /usr/sbin/e1gpt "$d" $specs > "$WORK/gpt.out" || die "GPT partition failed"
+    # shellcheck disable=SC2086
+    set -- $roles
+    while read -r dev type s e; do
+        part="${dev%%[[:space:]]*}"
+        # e1gpt 输出第一个字段本身即设备名
+        role="$1"; shift || true
+        case "$role" in
+            esp) P_ESP="$dev" ;;
+            biosboot) P_BIOSBOOT="$dev" ;;
+            home) P_HOME="$dev" ;;
+            swap) P_SWAP="$dev" ;;
+            root) P_ROOT="$dev" ;;
+        esac
+        wait_part "$dev"
+        ok "  $role -> $dev"
+    done < "$WORK/gpt.out"
+}
+
+# ---------------------------------------------------------------- 格式化
+mkfs_ext4() {
+    p="$1"
+    fetch_apk_static
+    step "Preparing standalone mkfs.ext4 environment"
+    rm -rf /tmp/e2root; mkdir -p /tmp/e2root
+    "$WORK/sbin/apk.static" --arch "$ARCH" -X "$REPOBASE/main" -U --allow-untrusted \
+        --root /tmp/e2root --initdb add e2fsprogs || die "mkfs.ext4 setup failed"
+    mkdir -p /tmp/e2root/dev; mount -o bind /dev /tmp/e2root/dev
+    chroot /tmp/e2root /sbin/mke2fs -F -t ext4 -i 8192 \
+        -O ^metadata_csum,^64bit ${2:+-L "$2"} "$p" \
+        || { umount /tmp/e2root/dev 2>/dev/null; die "mkfs.ext4 failed on $p"; }
+    umount /tmp/e2root/dev; rm -rf /tmp/e2root
+    ok "Formatted $p as ext4${2:+ (label $2)}"
+}
+mkfs_esp() {
+    step "Formatting EFI System Partition $1 (FAT32)"
+    mkfs.vfat -F 32 -n E1OS_EFI "$1" || die "mkfs.vfat failed on $1"
+}
+make_swap() {
+    step "Initializing swap on $1"
+    mkswap -L e1swap "$1" >/dev/null || die "mkswap failed on $1"
+}
+
+# ================================================================ 磁盘问答
+# 输出: DISK / DISKMODE / 各 P_* / PV_*
+if [ "$AUTO" != 1 ]; then
+    echo ""
+    step "Select installation disk"
+    list_disks
+    if [ -z "$DISK" ]; then
+        printf 'Which disk(s) would you like to use? (or ''?'' for help or ''none'') [none]: ' >&2
+        read -r dans || dans=""
+        case "$dans" in
+            none|"") DISK="" ;;
+            '?')
+                echo "  enter a disk name (vda, sda), 'none' for diskless RAM-only mode"
+                exit 1 ;;
+            *) DISK=$(norm_disk "$(echo "$dans" | awk '{print $1}')") ;;
+        esac
+    fi
+
+    if [ -n "$DISK" ]; then
+        [ -b "$DISK" ] || die "$DISK is not a block device"
+        echo ""
+        echo "Installation modes:"
+        echo "  sys       classic full install to the whole disk"
+        echo "  data      diskless system + persistent data disk (/var, cache, config)"
+        echo "  custom    assign mount points yourself (required: / and /boot/efi;"
+        echo "            recommended: /home and swap)"
+        echo "  preserve  keep existing operating system(s), install alongside them"
+        ask "How would you like to use it? ('sys','data','custom','preserve','?')" "sys" DISKMODE
+    else
+        DISKMODE=none
+        info "No disk selected: diskless mode (system runs from RAM/boot media)."
+    fi
+fi
+
+# ---- custom 挂载点向导
+wizard_custom() {
+    if [ "$FIRMWARE" = efi ]; then
+        ask "  Size of EFI System Partition (/boot/efi) in MiB" "512" ESPMB
+    fi
+    ram_mb=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)
+    ask "  Size of swap in MiB (0 = skip; recommended = RAM size)" "$ram_mb" SWAPMB
+    ask "  Size of separate /home in MiB (0 = skip; recommended if dual-boot)" "0" HOMEMB
+    ask "  Size of / in MiB (0 = all remaining space)" "0" ROOTMB
+}
+if [ "$AUTO" != 1 ] && [ "$DISKMODE" = custom ]; then
+    echo ""
+    echo "Custom mount-point allocation on $DISK"
+    wizard_custom
+fi
+
+# ---- preserve：选择既有分区
+list_parts() {
+    blkid 2>/dev/null | sed 's/^/  /'
+}
+if [ "$AUTO" != 1 ] && [ "$DISKMODE" = preserve ]; then
+    echo ""
+    step "Existing partitions detected:"
+    list_parts
+    echo ""
+    echo "Other partitions will NOT be touched. Pick the partition e1LibreOS should use."
+    ask_required "  Partition for / (will be FORMATTED ext4), e.g. /dev/sda5" PV_ROOT
+    [ -b "$PV_ROOT" ] || die "$PV_ROOT is not a block device"
+    ask_yn "  Erase and format $PV_ROOT as ext4?" "y" FMT_ROOT
+    if [ "$FIRMWARE" = efi ]; then
+        # 自动发现既有 ESP（vfat）
+        autoesp=$(blkid 2>/dev/null | awk '/TYPE="vfat"/{print $1}' | tr -d : | head -n 1)
+        ask "  Reuse EFI System Partition for /boot/efi" "${autoesp:-none}" PV_ESP
+        [ "$PV_ESP" = none ] && PV_ESP=""
+        if [ -n "$PV_ESP" ]; then [ -b "$PV_ESP" ] || die "$PV_ESP not found"; fi
+    fi
+    ask "  Reuse a partition for /home (or 'none')" "none" PV_HOME
+    [ "$PV_HOME" = none ] && PV_HOME=""
+    if [ -n "$PV_HOME" ]; then
+        ask_yn "  Format $PV_HOME? (say no if it contains data to keep)" "n" FMT_HOME
+    fi
+    autosw=$(blkid 2>/dev/null | awk '/TYPE="swap"/{print $1}' | tr -d : | head -n 1)
+    ask "  Reuse a swap partition (or 'none')" "${autosw:-none}" PV_SWAP
+    [ "$PV_SWAP" = none ] && PV_SWAP=""
+fi
+
+# ---- 抹除确认（sys/data/custom 整盘；setup-alpine 默认 n）
+ERASE_OK=n
+case "$DISKMODE" in
+    sys|data|custom)
+        if [ "$AUTO" != 1 ]; then
+            echo ""
+            echo "WARNING: The following disk(s) will be erased, ALL DATA WILL BE LOST:"
+            echo "  $DISK"
+            ask "Erase the above disk(s) and continue?" "n" ERASE_OK
+            [ "$ERASE_OK" = y ] || die "cancelled by user"
+        else
+            ERASE_OK=y
+        fi
+        ;;
+esac
+
+# ================================================================ 执行：网络与源
+step "Starting system configuration (firmware: $FIRMWARE, arch: $ARCH, profile: $PROFILE)"
+apply_live_network
+step "Probing package repositories..."
+probe_repo || die "no repository reachable (e1repo and public mirrors)"
+ok "Using repository: $REPO_LABEL ($REPOBASE)"
+
+# ---------------------------------------------------------------- 配置生成（磁盘目标与内存系统共用，$T 为目标根前缀）
+# $T 非空（磁盘安装）-> chroot；空（无盘写内存系统）-> 直接执行
+inT() {
+    if [ -n "$T" ]; then chroot "$T" "$@"; else "$@"; fi
+}
+
+gen_network_files() {
+    # /etc/network/interfaces
+    {
+        echo "auto lo"
+        echo "iface lo inet loopback"
+        if [ "$NIC" != done ] && [ -n "$NIC" ]; then
+            echo ""
+            echo "auto $NIC"
+            if [ "$IPADDR" = dhcp ]; then
+                echo "iface $NIC inet dhcp"
+            else
+                echo "iface $NIC inet static"
+                echo "  address $IPADDR"
+                echo "  netmask ${NETMASK:-255.255.255.0}"
+                [ -n "$GATEWAY" ] && echo "  gateway $GATEWAY"
+            fi
+        fi
+    } > "$T/etc/network/interfaces"
+    write_resolv "$T"
+}
+
+gen_identity() { # $1=目标根（磁盘：$MNT；无盘：空= /）
+    T="$1"
+    step "Applying e1LibreOS identity ($T)"
+    if [ -n "$T" ]; then
+        # 品牌文件（无盘模式 T 为空，源与目标都是 / ，不能自拷贝）
+        for f in os-release motd issue; do
+            [ -f "/etc/$f" ] && cp "/etc/$f" "$T/etc/$f"
+        done
+        cp /etc/udhcpc.script "$T/etc/udhcpc.script" 2>/dev/null || true
+        # 自研工具（安装到磁盘后也要可用）
+        mkdir -p "$T/usr/bin" "$T/usr/sbin" "$T/usr/share"
+        for b in e1pkg e1demo e1wm e1apk e1wine; do
+            [ -f "/usr/bin/$b" ] && cp "/usr/bin/$b" "$T/usr/bin/$b"
+            chmod +x "$T/usr/bin/$b" 2>/dev/null || true
+        done
+        [ -x /usr/sbin/e1gpt ] && cp /usr/sbin/e1gpt "$T/usr/sbin/e1gpt" && chmod +x "$T/usr/sbin/e1gpt"
+        cp -R /usr/share/e1wine "$T/usr/share/" 2>/dev/null || true
+        cp -R /usr/share/e1apk "$T/usr/share/" 2>/dev/null || true
+        mkdir -p "$T/srv/repo"; cp /srv/repo/* "$T/srv/repo/" 2>/dev/null || true
+        cp /etc/e1pkg.conf "$T/etc/e1pkg.conf" 2>/dev/null || true
+    fi
+
+    # 主机名 / 密码
+    echo "$HN" > "$T/etc/hostname"
+    if [ -n "$T" ]; then echo "root:$ROOTPASS" | chroot "$T" chpasswd
+    else echo "root:$ROOTPASS" | chpasswd; fi
+    ok "root password set"
+
+    # 键盘
+    if [ "$KEYMAP" != none ] && [ -n "$KEYMAP" ]; then
+        mkdir -p "$T/etc/conf.d"
+        printf 'keymap="%s %s"\n' "$KEYMAP" "${KVAR:-$KEYMAP}" > "$T/etc/conf.d/keymaps"
+    fi
+
+    # 时区
+    if [ "$TZ" != UTC ] && [ -n "$TZ" ]; then
+        echo "$TZ" > "$T/etc/TZ"
+        if [ -n "$T" ]; then
+            chroot "$T" ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime 2>/dev/null || true
+        else
+            ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime 2>/dev/null || true
+        fi
+    fi
+
+    # 代理
+    if [ -n "$PROXY_URL" ]; then
+        mkdir -p "$T/etc/profile.d"
+        cat > "$T/etc/profile.d/proxy.sh" <<EOF
+export http_proxy="$PROXY_URL"
+export https_proxy="$PROXY_URL"
+export ftp_proxy="$PROXY_URL"
+export HTTP_PROXY="$PROXY_URL"
+export HTTPS_PROXY="$PROXY_URL"
+EOF
+    fi
+
+    gen_network_files
+
+    # 用户
+    if [ "$SYSUSER" != no ] && [ -n "$SYSUSER" ]; then
+        if [ -n "$T" ]; then
+            chroot "$T" adduser -D -G wheel -s /bin/sh -g "$USERGECOS" "$SYSUSER" 2>/dev/null \
+                || chroot "$T" adduser -D -s /bin/sh -g "$USERGECOS" "$SYSUSER"
+            echo "$SYSUSER:$USERPASS" | chroot "$T" chpasswd
+        else
+            adduser -D -G wheel -s /bin/sh -g "$USERGECOS" "$SYSUSER" 2>/dev/null \
+                || adduser -D -s /bin/sh -g "$USERGECOS" "$SYSUSER"
+            echo "$SYSUSER:$USERPASS" | chpasswd
+        fi
+        mkdir -p "$T/etc/sudoers.d"
+        echo '%wheel ALL=(ALL) ALL' > "$T/etc/sudoers.d/10-wheel"
+        chmod 440 "$T/etc/sudoers.d/10-wheel"
+        ok "user $SYSUSER created (wheel group)"
+    fi
+
+    # SSH
+    if [ "$SSHD" != none ]; then
+        mkdir -p "$T/etc/ssh/sshd_config.d"
+        case "$SSHD" in
+            dropbear)
+                inT rc-update add dropbear default 2>/dev/null || true ;;
+            *)
+                if [ "$SSHROOT" != yes ]; then
+                    echo "PermitRootLogin $SSHROOT" > "$T/etc/ssh/sshd_config.d/99-e1os.conf"
+                fi
+                inT rc-update add sshd default 2>/dev/null || true ;;
+        esac
+        if [ "$SSHKEY" != none ] && [ -n "$SSHKEY" ]; then
+            mkdir -p "$T/root/.ssh"
+            case "$SSHKEY" in
+                http*) wget -qO- "$SSHKEY" >> "$T/root/.ssh/authorized_keys" 2>/dev/null || true ;;
+                *) [ -f "$SSHKEY" ] && cat "$SSHKEY" >> "$T/root/.ssh/authorized_keys" ;;
+            esac
+            chmod 700 "$T/root/.ssh"; chmod 600 "$T/root/.ssh/authorized_keys" 2>/dev/null || true
+        fi
+        ok "SSH server: $SSHD (root login: $SSHROOT)"
+    fi
+
+    # NTP
+    case "$NTPC" in
+        chrony)
+            inT rc-update add chronyd default 2>/dev/null || true ;;
+        openntpd)
+            inT rc-update add ntpd default 2>/dev/null || true ;;
+        busybox)
+            echo 'NTPD_OPTS="-l -n -p pool.ntp.org"' > "$T/etc/conf.d/ntpd" 2>/dev/null || true
+            inT rc-update add ntpd default 2>/dev/null || true ;;
+    esac
+}
+
+gen_inittab() {
+    # 磁盘/网卡/文件系统/USB 存储模块（安装系统内核为通用 linux-lts/virt，
+    # mdev 冷插拔不做自动 modprobe，必须在 networking 服务前显式加载）。
+    # 注意：必须逐个 modprobe —— busybox modprobe 遇内建模块会中止后续参数。
+    MODS_BASE="virtio_pci virtio_blk virtio_scsi sd_mod sr_mod \
+virtio_net e1000 af_packet ext4 fat vfat nls_cp437 nls_iso8859-1 usb-storage"
+    LOADBASE="for m in $MODS_BASE; do modprobe \$m 2>/dev/null; done; true"
+    if [ "$PROFILE" = workstation ]; then
+        cat > "$T/etc/inittab" <<EOF
+# /etc/inittab — e1LibreOS Workstation
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::sysinit:/bin/sh -c '$LOADBASE; for m in evdev psmouse usbhid hid_generic simpledrm; do modprobe \$m 2>/dev/null; done; true'
+::wait:/sbin/openrc default
+tty1::respawn:/usr/bin/e1wm
+tty2::respawn:/sbin/getty 38400 tty2
+ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown
+EOF
+        if [ -n "$T" ]; then chroot "$T" adduser -D -s /bin/sh e1 2>/dev/null || true
+             echo 'e1:e1os' | chroot "$T" chpasswd 2>/dev/null || true
+        fi
+    else
+        cat > "$T/etc/inittab" <<EOF
+# /etc/inittab — e1LibreOS Server
+::sysinit:/sbin/openrc sysinit
+::sysinit:/sbin/openrc boot
+::sysinit:/bin/sh -c '$LOADBASE'
+::wait:/sbin/openrc default
+
+tty1::respawn:/sbin/getty 38400 tty1
+tty2::respawn:/sbin/getty 38400 tty2
+ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
+
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/openrc shutdown
+EOF
+    fi
+    # openrc 服务（两个 profile 通用）
+    # sysinit：sysfs/procfs/设备节点/日志/硬件驱动冷加载（hwdrivers 会按
+    # /sys 设备自动 modprobe 网卡/磁盘驱动）
+    RC="chroot $T"
+    for sv in sysfs procfs devfs dmesg mdev hwdrivers; do
+        $RC rc-update add "$sv" sysinit >/dev/null 2>&1 || true
+    done
+    # boot：fsck + localmount（挂 fstab：/home 等）+ swap（swapon -a）
+    for sv in bootmisc fsck localmount swap modules hostname sysctl seedrng loopback; do
+        $RC rc-update add "$sv" boot >/dev/null 2>&1 || true
+    done
+    [ "$KEYMAP" != none ] && $RC rc-update add keymaps boot >/dev/null 2>&1 || true
+    $RC rc-update add networking default >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------- 引导安装
+install_extlinux_bios() {
+    step "Installing extlinux bootloader (BIOS)"
+    ensure_initrd
+    mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev"
+    mount -t proc proc "$MNT/proc"
+    mount -t sysfs sysfs "$MNT/sys"
+    mount -t devtmpfs devtmpfs "$MNT/dev" 2>/dev/null || true
+    chroot "$MNT" extlinux --install /boot || die "extlinux --install failed"
+    dd if="$MNT/usr/share/syslinux/mbr.bin" of="$DISK" bs=440 count=1 conv=notrunc status=none
+    VGA=""; [ "$PROFILE" = workstation ] && VGA="vga=0x342"
+    cat > "$MNT/boot/extlinux.conf" <<EOF
+DEFAULT e1libreos
+PROMPT 0
+TIMEOUT 20
+SERIAL 0 115200
+
+LABEL e1libreos
+  MENU LABEL e1LibreOS 1.0 (Libre) $PROFILE
+  LINUX /boot/$KERN
+  INITRD /boot/$INITRD
+  APPEND root=$P_ROOT rootfstype=ext4 modules=sd-mod,usb-storage,ext4 $CONSOLES $VGA
+EOF
+    umount "$MNT/proc" "$MNT/sys" 2>/dev/null || true
+    umount "$MNT/dev" 2>/dev/null || true
+    ok "extlinux installed"
+}
+
+ensure_initrd() {
+    if [ ! -f "$MNT/boot/$INITRD" ]; then
+        kver=$(ls "$MNT/lib/modules" | grep "$KVERPAT" | head -n 1)
+        [ -n "$kver" ] || die "kernel modules for $KERNPKG not found"
+        chroot "$MNT" mkinitfs "$kver" || true
+    fi
+    [ -f "$MNT/boot/$KERN" ] || die "kernel file /boot/$KERN missing"
+}
+
+write_grub_cfg() { # $1=额外菜单项文件内容（preserve 链式引导）
+    chainfile="$1"
+    mkdir -p "$MNT/boot/grub"
+    VGA=""
+    [ "$FIRMWARE" = bios ] && [ "$PROFILE" = workstation ] && VGA="vga=0x342"
+    cat > "$MNT/boot/grub/grub.cfg" <<EOF
+set timeout=3
+set default=0
+insmod part_gpt
+insmod ext2
+$( [ "$FIRMWARE" = efi ] && echo insmod fat )
+
+menuentry "e1LibreOS 1.0 (Libre) $PROFILE" {
+    $( [ "$FIRMWARE" = efi ] && echo "insmod chain" )
+    linux /boot/$KERN root=$P_ROOT rw rootfstype=ext4 $CONSOLES $VGA
+    initrd /boot/$INITRD
+}
+$chainfile
+EOF
+}
+
+# 扫描既有操作系统（preserve）：EFI 可执行文件 + 裸 MBR/PBR 分区
+gen_chain_entries() {
+    if [ "$FIRMWARE" = efi ] && [ -n "$P_ESP" ]; then
+        emnt="$MNT/boot/efi"
+        find "$emnt/EFI" -maxdepth 3 -iname '*.efi' 2>/dev/null | while IFS= read -r e; do
+            case "$e" in
+                */e1LibreOS/*|*/EFI/BOOT/BOOT*.EFI|*/grub*.efi) continue ;;
+            esac
+            rel=${e#$emnt/}
+            nm=$(basename "$rel")
+            case "$rel" in *Microsoft*) nm="Windows Boot Manager" ;; esac
+            cat <<ENTRY
+
+menuentry "$nm (existing OS)" {
+    search --no-floppy --set=root --file /$rel
+    chainloader /$rel
+}
+ENTRY
+        done
+    else
+        # BIOS：对检测到的 Windows/NTFS 分区给出链式项（需要 GRUB ntfs 模块）
+        blkid 2>/dev/null | while IFS= read -r line; do
+            echo "$line" | grep -q 'TYPE="ntfs"' || continue
+            d=$(echo "$line" | awk '{print $1}' | tr -d :)
+            pnum=$(echo "$d" | sed 's/.*[^0-9]\([0-9]*\)$/\1/')
+            cat <<ENTRY
+
+menuentry "Existing Windows on $d" {
+    insmod ntfs
+    set root=(hd0,$pnum)
+    chainloader +1
+}
+ENTRY
+        done
+    fi
+}
+
+# EFI 固件加载的 grub 位于 ESP 上，需要一个小 stub 把 root 切到根分区，
+# 再读取真正的 /boot/grub/grub.cfg（removable 路径与专属路径各放一份）
+write_efi_grub_stub() {
+    [ "$FIRMWARE" = efi ] || return 0
+    [ -n "$ROOTUUID" ] || { info "warning: root UUID unknown, EFI stub not written"; return 0; }
+    for d in "$MNT/boot/efi/EFI/BOOT" "$MNT/boot/efi/EFI/e1LibreOS"; do
+        mkdir -p "$d"
+        cat > "$d/grub.cfg" <<EOF
+search --no-floppy --set=root --fs-uuid $ROOTUUID
+set prefix=(\$root)/boot/grub
+configfile /boot/grub/grub.cfg
+EOF
+    done
+    ok "EFI GRUB stub installed (BOOT + e1LibreOS)"
+}
+
+install_grub() { # $1=removable(0|1)
+    removable="$1"
+    step "Installing GRUB ($FIRMWARE)"
+    ensure_initrd
+    mkdir -p "$MNT/proc" "$MNT/sys" "$MNT/dev"
+    mount -t proc proc "$MNT/proc"
+    mount -t sysfs sysfs "$MNT/sys"
+    mount -o bind /dev "$MNT/dev"
+    if [ "$FIRMWARE" = efi ]; then
+        mkdir -p "$MNT/boot/efi" "$MNT/sys/firmware/efi/efivars"
+        mount -t efivarfs efivarfs "$MNT/sys/firmware/efi/efivars" 2>/dev/null || true
+        args="--target=$GRUB_EFI_TARGET --efi-directory=/boot/efi --boot-directory=/boot"
+        if [ "$removable" = 1 ]; then
+            args="$args --removable"
+        else
+            args="$args --bootloader-id=e1LibreOS"
+        fi
+        if ! chroot "$MNT" grub-install $args 2>/tmp/grub.err; then
+            info "grub-install (NVRAM) failed, retrying with removable media path:"
+            sed 's/^/    /' /tmp/grub.err >&2 || true
+            chroot "$MNT" grub-install --target="$GRUB_EFI_TARGET" \
+                --efi-directory=/boot/efi --boot-directory=/boot --removable \
+                || die "grub-install EFI failed"
+            info "Installed as /EFI/BOOT/$EFI_BOOTNAME (removable fallback; becomes default boot entry)"
+        fi
+        umount "$MNT/sys/firmware/efi/efivars" 2>/dev/null || true
+    else
+        chroot "$MNT" grub-install --target=i386-pc --boot-directory=/boot "$DISK" \
+            || die "grub-install BIOS failed"
+    fi
+    umount "$MNT/proc" "$MNT/sys" 2>/dev/null || true
+    umount "$MNT/dev" 2>/dev/null || true
+    ok "GRUB installed"
+}
+
+write_fstab_target() {
+    {
+        echo "# /etc/fstab — generated by setup-e1os"
+        [ -n "$P_ROOT" ] && echo "$P_ROOT  /  ext4  defaults,noatime  0  1"
+        [ -n "$P_ESP" ]  && echo "$P_ESP  /boot/efi  vfat  defaults  0  0"
+        [ -n "$P_HOME" ] && echo "$P_HOME  /home  ext4  defaults,noatime  0  2"
+        [ -n "$P_SWAP" ] && echo "$P_SWAP  none  swap  sw  0  0"
+        true
+    } >> "$MNT/etc/fstab"
+}
+
+# ---------------------------------------------------------------- 软件包选择
+build_pkg_list() {
+    PKGS="alpine-base $KERNPKG e2fsprogs"
+    if [ "$PROFILE" = workstation ]; then
+        PKGS="$PKGS linux-firmware-none"
+    fi
+    case "$BOOTLOADER" in
+        extlinux) PKGS="$PKGS syslinux" ;;
+        grub)
+            if [ "$FIRMWARE" = efi ]; then PKGS="$PKGS grub-efi efibootmgr dosfstools"
+            else PKGS="$PKGS grub-bios dosfstools"; fi
+            ;;
+    esac
+    [ "$KEYMAP" != none ] && PKGS="$PKGS kbd kbd-bkeymaps"
+    [ "$TZ" != UTC ] && PKGS="$PKGS tzdata"
+    case "$NTPC" in chrony) PKGS="$PKGS chrony chrony-openrc" ;;
+                          openntpd) PKGS="$PKGS openntpd" ;; esac
+    case "$SSHD" in openssh) PKGS="$PKGS openssh" ;;
+                           dropbear) PKGS="$PKGS dropbear dropbear-openrc" ;; esac
+    [ "$SYSUSER" != no ] && [ -n "$SYSUSER" ] && PKGS="$PKGS sudo" || true
+}
+
+# ================================================================ 无盘 / 数据盘模式
+APKOVL_NAME=""
+snapshot_overlay() { # $1=挂载点根目录（介质），$2=子目录（.boot_repository 或 .）
+    mroot="$1"; sub="$2"
+    mkdir -p "$mroot/$sub"
+    out="$mroot/$sub/$HN.apkovl.tar.gz"
+    step "Writing configuration overlay: $out"
+    # 与 Alpine apkovl 同形态：/etc + 用户家目录 + apk 状态 + 我们的工具增量
+    tar czf "$out" -C / \
+        etc root home \
+        $( [ -d /usr/local ] && echo usr/local ) \
+        2>/dev/null || die "apkovl snapshot failed"
+    sync
+    ok "Overlay saved. On boot it is restored automatically (local backup)."
+}
+
+prepare_usb_media() { # 选一块非系统盘，GPT+FAT32 label E1OVL
+    cand=""
+    for d in /dev/vdb /dev/sdb /dev/vdc /dev/sdc; do [ -b "$d" ] && { cand="$d"; break; }; done
+    [ -n "$cand" ] || die "no removable/second disk found for config storage"
+    echo "WARNING: $cand will be erased to store your persistent configuration."
+    if [ "$AUTO" != 1 ]; then
+        ask "Erase $cand and use it as config storage?" "y" e
+        [ "$e" = y ] || die "cancelled"
+    fi
+    DISK="$cand"
+    run_e1gpt "$cand" "root:0"
+    mkfs.vfat -F 32 -n E1OVL "$P_ROOT"
+    mkdir -p /media/ovl
+    mount "$P_ROOT" /media/ovl || die "mount config media failed"
+    MEDIA_MNT=/media/ovl
+}
+
+do_diskless() {
+    step "Diskless mode: system runs in RAM; configuring persistent storage"
+    fetch_apk_static
+    # 让 apk.static 在重启后仍可用（随 apkovl 持久化）
+    mkdir -p /usr/local/bin
+    cp "$WORK/sbin/apk.static" /usr/local/bin/apk.static
+    ln -sf apk.static /usr/local/bin/apk 2>/dev/null || true
+    write_repositories ""
+    PKGS=""
+    case "$NTPC" in chrony) PKGS="chrony chrony-openrc" ;;
+                          openntpd) PKGS="openntpd" ;; esac
+    case "$SSHD" in openssh) PKGS="$PKGS openssh" ;;
+                           dropbear) PKGS="$PKGS dropbear dropbear-openrc" ;; esac
+    [ "$KEYMAP" != none ] && PKGS="$PKGS kbd kbd-bkeymaps"
+    [ "$TZ" != UTC ] && PKGS="$PKGS tzdata"
+    [ -n "$PKGS" ] && apk_add / $PKGS
+    # identity 写入当前内存系统
+    gen_identity ""
+    # 启动服务（Live 无 openrc，直接拉起）
+    ssh-keygen -A >/dev/null 2>&1 || true
+    case "$SSHD" in
+        openssh) /usr/sbin/sshd 2>/dev/null || true ;;
+        dropbear) dropbear 2>/dev/null || true ;;
+    esac
+    case "$NTPC" in
+        chrony) chronyd 2>/dev/null || true ;;
+        busybox) ntpd -l -n -p pool.ntp.org 2>/dev/null & ;;
+    esac
+    [ "$KEYMAP" != none ] && loadkmap < "/usr/share/bkeymaps/$KEYMAP/${KVAR:-$KEYMAP}.bmap" 2>/dev/null || true
+
+    # apk 世界清单（供启动后从缓存恢复软件包）
+    apk info --installed 2>/dev/null | sort -u > /etc/apk/world || true
+
+    case "$LBUMEDIA" in
+        usb)
+            prepare_usb_media
+            mkdir -p /media/ovl/cache
+            ln -snf /media/ovl/cache /etc/apk/cache 2>/dev/null || true
+            snapshot_overlay /media/ovl .
+            umount /media/ovl 2>/dev/null || true
+            ;;
+        data)
+            do_data_disk
+            ;;
+        none|*)
+            ok "No persistent media selected. Config lives only in RAM."
+            info "You can later plug a USB disk labeled E1OVL and run: e1os-commit"
+            ;;
+    esac
+
+    echo ""
+    printf '\033[1;32mDiskless setup complete.\033[0m System runs from RAM; reboot keeps the media untouched.\n'
+    echo "Save configuration any time with: e1os-commit   (writes a new .apkovl.tar.gz)"
+    exit 0
+}
+
+do_data_disk() {
+    [ -n "$DISK" ] || die "data mode needs a disk"
+    run_e1gpt "$DISK" "root:0"
+    mkfs_ext4 "$P_ROOT" E1DATA
+    mkdir -p /media/e1data
+    mount "$P_ROOT" /media/e1data || die "mount data disk failed"
+    mkdir -p /media/e1data/cache /media/e1data/.boot_repository
+    # 内存系统 fstab：启动时把数据盘挂到 /var（apkovl 恢复后生效）
+    grep -q E1DATA /etc/fstab 2>/dev/null || \
+        echo "LABEL=E1DATA  /var  ext4  defaults  0  2" >> /etc/fstab
+    ln -snf /media/e1data/cache /etc/apk/cache 2>/dev/null || true
+    snapshot_overlay /media/e1data .boot_repository
+    umount /media/e1data 2>/dev/null || true
+}
+
+# ================================================================ 磁盘安装主流程
+# 无盘 / 数据盘：系统始终在内存中运行，do_diskless 内部 exit
+if [ "$DISKMODE" = none ] || [ "$DISKMODE" = data ]; then
+    [ "$DISKMODE" = data ] && LBUMEDIA=data
+    do_diskless
+fi
+
+# 目标盘可能正被 data/diskless 运行态占用（如 LABEL=E1DATA 挂在 /var、
+# apkovl 介质挂在 /media/...），重新分区前必须全部释放
+release_target_disk() {
+    step "Releasing mounts on target disk $DISK"
+    swapon -s 2>/dev/null | awk -v d="$DISK" '$1 ~ d {print $1}' | while read -r sw; do
+        swapoff "$sw" 2>/dev/null && info "swapoff $sw"
+    done
+    # /proc/mounts 设备字段匹配目标盘（/dev/sda、/dev/sda1），逆序卸载保证子挂载先脱
+    awk -v d="$DISK" '$1 == d || $1 ~ ("^" d "[0-9]") {print $2}' /proc/mounts \
+        | tac 2>/dev/null | while read -r mp; do
+        if umount "$mp" 2>/dev/null; then info "umount $mp"; fi
+    done
+    # busybox 无 tac：若有残留，再正向重复两遍（挂载点不含深层嵌套时足够）
+    for i in 1 2; do
+        for mp in $(awk -v d="$DISK" '$1 == d || $1 ~ ("^" d "[0-9]") {print $2}' /proc/mounts); do
+            umount "$mp" 2>/dev/null && info "umount $mp"
+        done
+    done
+    if awk -v d="$DISK" '$1 == d || $1 ~ ("^" d "[0-9]")' /proc/mounts | grep -q .; then
+        die "target disk $DISK is still in use; stop services using it and retry"
+    fi
+}
+release_target_disk
+
+# 分区
+BOOTLOADER=extlinux
+case "$DISKMODE" in
+    sys)
+        if [ "$FIRMWARE" = efi ]; then
+            run_e1gpt "$DISK" "esp:${ESPMB:-512}" "root:0"
+            BOOTLOADER=grub
+        else
+            part_mbr_single
+        fi
+        ;;
+    custom)
+        BOOTLOADER=grub
+        roles=""
+        [ "$FIRMWARE" = bios ] && roles="$roles biosboot:1"
+        [ "$FIRMWARE" = efi ] && roles="$roles esp:${ESPMB:-512}"
+        [ "${HOMEMB:-0}" -gt 0 ] 2>/dev/null && roles="$roles home:$HOMEMB"
+        [ "${SWAPMB:-0}" -gt 0 ] 2>/dev/null && roles="$roles swap:$SWAPMB"
+        roles="$roles root:${ROOTMB:-0}"
+        # shellcheck disable=SC2086
+        run_e1gpt "$DISK" $roles
+        ;;
+    preserve)
+        BOOTLOADER=grub
+        P_ROOT="$PV_ROOT"
+        P_ESP="$PV_ESP"
+        P_HOME="$PV_HOME"
+        P_SWAP="$PV_SWAP"
+        # 由根分区推导整盘（/dev/sda5 -> /dev/sda），供 grub BIOS MBR 安装
+        if [ -z "$DISK" ]; then
+            DISK=$(echo "$P_ROOT" | sed 's/[0-9]*$//')
+        fi
+        ;;
+    *)
+        die "unknown disk mode: $DISKMODE" ;;
+esac
+
+# 格式化
+case "$DISKMODE" in
+    sys|custom)
+        [ -n "$P_ESP" ] && mkfs_esp "$P_ESP"
+        mkfs_ext4 "$P_ROOT"
+        [ -n "$P_HOME" ] && mkfs_ext4 "$P_HOME"
+        [ -n "$P_SWAP" ] && make_swap "$P_SWAP"
+        ;;
+    preserve)
+        [ "${FMT_ROOT:-y}" = y ] && mkfs_ext4 "$P_ROOT"
+        [ -n "$P_HOME" ] && [ "${FMT_HOME:-n}" = y ] && mkfs_ext4 "$P_HOME"
+        [ -n "$P_ESP" ] && info "Keeping existing ESP: $P_ESP (not formatted)"
+        ;;
+esac
+
+# 挂载
+umount "$MNT" 2>/dev/null || true
+rm -rf "$MNT"; mkdir -p "$MNT"
+mount -t ext4 "$P_ROOT" "$MNT" || die "mount $P_ROOT failed"
+# 记录根文件系统 UUID（EFI stub / 未来 fstab 切 UUID 用）
+ROOTUUID=$(blkid "$P_ROOT" 2>/dev/null | sed -n 's/.*UUID="\([^"]*\)".*/\1/p' | head -n 1)
+[ -n "$P_ESP" ] && { mkdir -p "$MNT/boot/efi"; mount "$P_ESP" "$MNT/boot/efi" || die "mount ESP failed"; }
+[ -n "$P_HOME" ] && { mkdir -p "$MNT/home"; mount "$P_HOME" "$MNT/home" || die "mount /home failed"; }
+[ -n "$P_SWAP" ] && swapon "$P_SWAP" 2>/dev/null || true
+
+# 安装
+write_repositories "$MNT"
+build_pkg_list
+step "Installing system packages: $PKGS"
+apk_add "$MNT" $PKGS || die "system package install failed"
+ok "Base system installed"
+
+# 身份/服务/自研工具
+gen_identity "$MNT"
+gen_inittab
+write_fstab_target
+
+# 引导
+case "$BOOTLOADER" in
+    extlinux) install_extlinux_bios ;;
+    grub)
+        chains=""
+        [ "$DISKMODE" = preserve ] && chains=$(gen_chain_entries)
+        write_grub_cfg "$chains"
+        install_grub "$( [ "$DISKMODE" = preserve ] && [ "$FIRMWARE" = efi ] && echo 0 || echo 1 )"
+        write_efi_grub_stub
+        ;;
+esac
+
+# 数据盘模式附带（sys/custom 不涉及）
+step "Syncing and unmounting target"
+sync
+[ -n "$P_SWAP" ] && swapoff "$P_SWAP" 2>/dev/null || true
+umount "$MNT/home" 2>/dev/null || true
+umount "$MNT/boot/efi" 2>/dev/null || true
+umount "$MNT" 2>/dev/null || true
+
+echo ""
+printf '\033[1;32mInstallation complete!\033[0m e1LibreOS (%s) is installed on %s\n' "$PROFILE" "$DISK"
+echo "Mount layout written to /etc/fstab. Remove install media and reboot."
+[ "$DISKMODE" = preserve ] && echo "GRUB menu includes entries to chain-boot the previously installed OS." || true
+exit 0

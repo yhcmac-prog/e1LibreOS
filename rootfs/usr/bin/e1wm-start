@@ -1,0 +1,4 @@
+#!/bin/sh
+# e1wm 启动包装器：捕获错误输出到串口（调试用）
+echo "e1wm-start: launching e1wm..." >/dev/ttyS0
+exec /usr/bin/e1wm >/dev/ttyS0 2>&1

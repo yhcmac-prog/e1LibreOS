@@ -1,0 +1,13 @@
+# /etc/profile — e1LibreOS shell 环境
+export PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
+# busybox ash 不支持 \u \W 等 PS1 转义，使用静态提示符
+export PS1='[root@e1libreos ~]# '
+export HOME=/root
+export EDITOR=vi
+
+cd /root 2>/dev/null
+
+# 登录后显示 motd（printf %b 解释 ANSI 颜色）
+if [ -f /etc/motd ]; then
+    printf '%b' "$(cat /etc/motd)"
+fi

@@ -1,0 +1,3 @@
+#!/bin/sh
+# /bin/autologin — 控制台自动登录（Live 模式）
+exec /bin/login -f root

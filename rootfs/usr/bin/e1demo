@@ -1,0 +1,146 @@
+#!/bin/sh
+# e1demo — 开机自动演示 e1pkg（依赖解析 / 安装 / 卸载）
+# 输出到 /dev/console，两种控制台（tty1 / ttyS0）都能看到
+# 注意：输出统一英文（VGA 文本控制台无 CJK 字形，中文会显示为方块）
+
+{
+    sleep 2
+    echo ""
+    echo "============ e1pkg smoke demo (e1demo) ============"
+    echo "--- search fetch ---"
+    e1pkg search fetch
+
+    echo ""
+    echo "--- install e1fetch (should resolve and install dependency cowsay first) ---"
+    e1pkg install e1fetch || echo "e1demo: FAIL install"
+
+    echo ""
+    echo "--- run e1fetch ---"
+    e1fetch || echo "e1demo: FAIL e1fetch"
+
+    echo ""
+    echo "--- list installed ---"
+    e1pkg list installed
+
+    echo ""
+    echo "--- remove cowsay (should be rejected: required by e1fetch) ---"
+    e1pkg remove cowsay 2>&1 || true
+
+    echo ""
+    echo "--- install + remove hello ---"
+    e1pkg install hello && e1pkg remove hello || echo "e1demo: FAIL hello"
+    hello 2>/dev/null || echo "e1demo: hello removed with its package, as expected"
+
+    echo ""
+    echo "============ demo done — see e1pkg --help for more ============"
+
+    # 网络探测（setup-e1os 安装器依赖在线源）
+    echo "============ network probe ============"
+    dmesg | grep -iE 'e1000|virtio_net|8139|eth[0-9]' | head -n 3
+    if ip link show eth0 >/dev/null 2>&1; then
+        echo "detected eth0, trying DHCP..."
+        ip link set eth0 up
+        timeout 25 udhcpc -i eth0 -n -q -t 6 -T 3 -s /etc/udhcpc.script 2>&1 \
+            || echo "DHCP-FAIL (timeout or no reply)"
+        ip addr show eth0 | grep -E 'inet ' || echo "eth0 has no IPv4 address"
+        echo "-- testing APKINDEX download (aliyun)..."
+        if wget -q -T 10 -O /dev/null \
+            http://mirrors.aliyun.com/alpine/v3.21/main/x86_64/APKINDEX.tar.gz; then
+            echo "NET-OK: Alpine mirror reachable, setup-e1os online install available"
+        else
+            echo "NET-FAIL: cannot reach the Alpine mirror"
+        fi
+        # 网络仓库端到端测试（遍历 e1pkg.conf 中全部 URL 源，任一可达即可）
+        echo "-- e1pkg network repo test: e1pkg install hello --"
+        rurl=""
+        while IFS='|' read -r rid rname rpath; do
+            case "$rid" in ''|\#*) continue ;; esac
+            case "$rpath" in
+                http://*|https://*)
+                    if wget -q -T 5 -O /dev/null "$rpath/repo.db"; then
+                        rurl="$rpath"; break
+                    fi ;;
+            esac
+        done < /etc/e1pkg.conf
+        if [ -n "$rurl" ]; then
+            echo "E1REPO-REACHABLE: $rurl"
+        else
+            echo "E1REPO-UNREACHABLE (will fall back to local /srv/repo)"
+        fi
+        e1pkg remove hello 2>/dev/null || true
+        e1pkg install hello && hello \
+            && echo "NETREPO-OK: network repo install succeeded" \
+            || echo "NETREPO-FAIL: network repo install failed"
+    else
+        echo "NET-FAIL: no eth0 NIC (VM NIC type must be virtio/e1000)"
+    fi
+    echo ""
+    echo ""
+
+    # framebuffer 探测（自研图形界面 e1wm 的依赖，workstation 版需要）
+    echo "============ framebuffer probe ============"
+    if [ -e /dev/fb0 ]; then
+        echo "FB-OK: /dev/fb0 exists ($(cat /proc/fb 2>/dev/null | head -n 2))"
+    else
+        echo "FB-NONE: no /dev/fb0 ($(cat /proc/fb 2>/dev/null || echo /proc/fb missing))"
+    fi
+    echo ""
+    echo ""
+
+    # e1wine（Wine 变种）：运行随系统分发的演示 PE32+ 程序
+    echo "============ e1wine Win32 PE compatibility ============"
+    if [ -x /usr/bin/e1wine ] && [ -f /usr/share/e1wine/hello.exe ]; then
+        e1wine --version
+        echo "-- e1wine --info /usr/share/e1wine/hello.exe --"
+        e1wine --info /usr/share/e1wine/hello.exe 2>&1 | head -n 6
+        echo "-- e1wine /usr/share/e1wine/hello.exe --"
+        if WINEDEBUG=-all e1wine /usr/share/e1wine/hello.exe 2>&1; then
+            echo "E1WINE-OK: Windows PE executed on e1LibreOS"
+        else
+            echo "E1WINE-FAIL: PE execution returned error"
+        fi
+    else
+        echo "e1wine or hello.exe not present (skipped)"
+    fi
+    echo ""
+    echo ""
+
+    # e1apk：APK 清单解析与解包演示（不执行 Dalvik 字节码）
+    echo "============ e1apk Android APK tool ============"
+    if [ -x /usr/bin/e1apk ] && [ -f /usr/share/e1apk/hello.apk ]; then
+        e1apk --version
+        echo "-- e1apk info /usr/share/e1apk/hello.apk --"
+        e1apk info /usr/share/e1apk/hello.apk 2>&1
+        echo "-- e1apk extract /usr/share/e1apk/hello.apk /tmp/hello_apk --"
+        rm -rf /tmp/hello_apk
+        if e1apk extract /usr/share/e1apk/hello.apk /tmp/hello_apk >/dev/null 2>&1 &&
+           [ -f /tmp/hello_apk/assets/hello.txt ]; then
+            echo "asset: $(cat /tmp/hello_apk/assets/hello.txt | head -n 1)"
+            echo "E1APK-OK: APK parsed and extracted"
+        else
+            echo "E1APK-FAIL: extract error"
+        fi
+    else
+        echo "e1apk or hello.apk not present (skipped)"
+    fi
+    echo ""
+    echo ""
+
+    # 自动安装模式（自动化测试/无人值守部署）:
+    # 内核参数含 e1os_autosetup 且存在 virtio 磁盘（vda=virtio-blk / sda=virtio-scsi）时自动安装
+    if grep -q 'e1os_autosetup' /proc/cmdline 2>/dev/null; then
+        if [ -b /dev/vda ]; then
+            AUTODISK=/dev/vda
+        elif [ -b /dev/sda ]; then
+            AUTODISK=/dev/sda
+        fi
+        if [ -n "${AUTODISK:-}" ]; then
+            # 安装 profile 跟随介面变体（server/workstation，见 os-release）
+            E1PROFILE=$(sed -n 's/^VARIANT_ID=//p' /etc/os-release 2>/dev/null)
+            case "$E1PROFILE" in server|workstation) ;; *) E1PROFILE=server ;; esac
+            echo "e1os_autosetup detected — installing e1LibreOS ($E1PROFILE) to $AUTODISK ..."
+            setup-e1os --auto --profile "$E1PROFILE" "$AUTODISK" || echo "SETUP-FAIL"
+            echo "AUTOSETUP-DONE"
+        fi
+    fi
+} > /dev/console 2>&1
