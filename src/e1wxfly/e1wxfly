@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+# e1wxfly — e1LibreOS 应用包装工具（类似 WineBotter / Wineskin）
+# 把 EXE 或第三方 X11/Wayland 应用包装为独立可分发的产物
+#
+# 用法:
+#   e1wxfly elf  <input.exe>  [-n name] [-o output]
+#       生成 Linux 自解压 ELF（内嵌 EXE + e1wine，自动 chmod +x）
+#   e1wxfly app  <input.exe>  [-n name] [-i icon.icns] [-o Name.app]
+#       生成 macOS .app 应用包（universal 启动器 + EXE）
+#   e1wxfly wrap-x11 <binary-or-script> [-n name] [-o output]
+#       包装 X11/Wayland 应用为单文件 ELF（内嵌启动脚本，自动加权）
+#
+# 与 e1wine 的关系：
+#   e1wine 是运行时兼容层（直接运行 EXE）
+#   e1wxfly 是打包工具（把应用+启动器合成可分发的产物）
+
+import os, sys, struct, subprocess, shutil, argparse, stat, zlib
+
+E1_TRL_MAGIC = b"E1WXFLY1"
+E1_TRL_FIXED = 24
+
+def crc32(data: bytes) -> int:
+    return zlib.crc32(data) & 0xffffffff
+
+def put_le64(v): return struct.pack("<Q", v)
+def put_le32(v): return struct.pack("<I", v)
+
+def find_self_payload(self_path: str):
+    """在自身文件尾部查找 E1WXFLY1 trailer"""
+    try:
+        with open(self_path, "rb") as f:
+            f.seek(0, 2)
+            fsz = f.tell()
+            if fsz < E1_TRL_FIXED:
+                return None
+            f.seek(max(0, fsz - 4096))
+            tail = f.read(4096)
+            for scan in range(len(tail) - E1_TRL_FIXED, -1, -1):
+                if tail[scan:scan+8] != E1_TRL_MAGIC:
+                    continue
+                sz = struct.unpack("<Q", tail[scan+8:scan+16])[0]
+                crc = struct.unpack("<I", tail[scan+16:scan+20])[0]
+                nl = struct.unpack("<I", tail[scan+20:scan+24])[0]
+                if nl > 128:
+                    continue
+                if scan + E1_TRL_FIXED + nl != len(tail):
+                    continue
+                if sz + E1_TRL_FIXED + nl > fsz:
+                    continue
+                name = tail[scan+24:scan+24+nl].decode("utf-8", "replace")
+                off = fsz - (E1_TRL_FIXED + nl) - sz
+                return {"off": off, "size": sz, "crc": crc, "name": name}
+    except Exception:
+        pass
+    return None
+
+def extract_self_payload(self_path: str, pl: dict, out_dir: str):
+    """把内嵌载荷解到 out_dir，自动 chmod +x"""
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, pl["name"])
+    if os.path.exists(out_path) and os.path.getsize(out_path) == pl["size"]:
+        os.chmod(out_path, 0o755)
+        return out_path
+    tmp = os.path.join(out_dir, f".tmp-{os.getpid()}")
+    with open(self_path, "rb") as fin, open(tmp, "wb") as fout:
+        fin.seek(pl["off"])
+        remain = pl["size"]
+        while remain > 0:
+            chunk = fin.read(min(65536, remain))
+            if not chunk:
+                break
+            fout.write(chunk)
+            remain -= len(chunk)
+    os.chmod(tmp, 0o755)
+    os.rename(tmp, out_path)
+    return out_path
+
+# ---------------------------------------------------------------------------
+# convert --elf
+# ---------------------------------------------------------------------------
+
+def cmd_elf(args):
+    launcher = os.environ.get("E1WINE_ELF_LAUNCHER", "")
+    if not launcher:
+        for cand in ("e1wine-linux-x86_64", "./e1wine-linux-x86_64"):
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                launcher = cand
+                break
+    if not launcher:
+        print("e1wxfly: 找不到 Linux ELF 版 e1wine 作为包装器。", file=sys.stderr)
+        print("  请设置 E1WINE_ELF_LAUNCHER 或把 e1wine-linux-x86_64 放到当前目录。", file=sys.stderr)
+        return 1
+
+    name = args.name or os.path.splitext(os.path.basename(args.exe))[0] or "program"
+    out = args.output or f"./{name}-linux"
+
+    shutil.copy2(launcher, out)
+    os.chmod(out, 0o755)
+
+    with open(args.exe, "rb") as fin:
+        exe_data = fin.read()
+    crc = crc32(exe_data)
+    namelen = len(name.encode())
+
+    with open(out, "ab") as fout:
+        fout.write(exe_data)
+        fout.write(E1_TRL_MAGIC)
+        fout.write(put_le64(len(exe_data)))
+        fout.write(put_le32(crc))
+        fout.write(put_le32(namelen))
+        fout.write(name.encode())
+
+    os.chmod(out, 0o755)
+    print(f"已生成自解压 Linux 程序（自动 chmod +x）：{out}")
+    print(f"  运行：{out}   # 自动解包内嵌的 {args.exe} 后由 e1wine 加载")
+    return 0
+
+# ---------------------------------------------------------------------------
+# convert --app
+# ---------------------------------------------------------------------------
+
+def cmd_app(args):
+    name = args.name or os.path.splitext(os.path.basename(args.exe))[0] or "program"
+    bundle = args.output or f"./{name}.app"
+
+    macos_dir = os.path.join(bundle, "Contents/MacOS")
+    resources_dir = os.path.join(bundle, "Contents/Resources")
+    os.makedirs(macos_dir, exist_ok=True)
+    os.makedirs(resources_dir, exist_ok=True)
+
+    # 启动器
+    launcher_src = os.environ.get("E1WINE_MAC_LAUNCHER", "")
+    if not launcher_src:
+        for cand in ("e1wine-mac-launcher-universal", "./e1wine-mac-launcher-universal"):
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                launcher_src = cand
+                break
+    if not launcher_src:
+        print("e1wxfly: 缺少 macOS universal 启动器。", file=sys.stderr)
+        print("  请设置 E1WINE_MAC_LAUNCHER 或把 e1wine-mac-launcher-universal 放到当前目录。", file=sys.stderr)
+        return 1
+
+    shutil.copy2(launcher_src, os.path.join(macos_dir, "e1wine-launcher"))
+    os.chmod(os.path.join(macos_dir, "e1wine-launcher"), 0o755)
+
+    # EXE 载荷
+    base = os.path.basename(args.exe)
+    shutil.copy2(args.exe, os.path.join(resources_dir, base))
+    with open(os.path.join(resources_dir, "payload-name"), "w") as f:
+        f.write(base)
+
+    # 图标
+    if args.icon:
+        shutil.copy2(args.icon, os.path.join(resources_dir, "AppIcon.icns"))
+
+    # Info.plist
+    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>{name}</string>
+  <key>CFBundleDisplayName</key><string>{name}</string>
+  <key>CFBundleIdentifier</key><string>org.e1libreos.{name}</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>e1wine-launcher</string>
+"""
+    if args.icon:
+        plist += "  <key>CFBundleIconFile</key><string>AppIcon</string>\n"
+    plist += """  <key>LSMinimumSystemVersion</key><string>10.13</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+"""
+    with open(os.path.join(bundle, "Contents/Info.plist"), "w") as f:
+        f.write(plist)
+
+    print(f"已生成 macOS 应用包：{bundle}")
+    print(f"  启动器：Contents/MacOS/e1wine-launcher（x86_64+arm64 universal）")
+    print(f"  载荷：  Contents/Resources/{base}（运行时委托系统 Wine 执行）")
+    return 0
+
+# ---------------------------------------------------------------------------
+# wrap-x11 — 包装第三方 X11/Wayland 应用
+# ---------------------------------------------------------------------------
+
+X11_WRAPPER_TEMPLATE = """#!/bin/sh
+# e1wxfly X11/Wayland 包装器 — 自动解包内嵌应用并启动
+# 由 e1wxfly wrap-x11 生成
+
+SELF="$0"
+CACHEDIR="${XDG_CACHE_HOME:-$HOME/.cache}/e1wxfly"
+mkdir -p "$CACHEDIR"
+
+# 提取内嵌载荷（Python 脚本处理 trailer）
+EXTRACTED=$(python3 -c "
+import sys, os, struct
+sys.path.insert(0, os.path.dirname(os.path.abspath('$SELF')))
+from e1wxfly import find_self_payload, extract_self_payload
+pl = find_self_payload('$SELF')
+if pl:
+    out = extract_self_payload('$SELF', pl, '$CACHEDIR')
+    print(out)
+" 2>/dev/null)
+
+if [ -z "$EXTRACTED" ] || [ ! -x "$EXTRACTED" ]; then
+    echo "e1wxfly: 无法解包内嵌载荷" >&2
+    exit 1
+fi
+
+# 启动 X11/Wayland 应用
+exec "$EXTRACTED" "$@"
+"""
+
+def cmd_wrap_x11(args):
+    name = args.name or os.path.splitext(os.path.basename(args.binary))[0] or "app"
+    out = args.output or f"./{name}-x11"
+
+    # 生成包装器脚本
+    with open(out, "w") as f:
+        f.write(X11_WRAPPER_TEMPLATE)
+    os.chmod(out, 0o755)
+
+    # 追加二进制载荷
+    with open(args.binary, "rb") as fin:
+        bin_data = fin.read()
+    crc = crc32(bin_data)
+    namelen = len(name.encode())
+
+    with open(out, "ab") as fout:
+        fout.write(bin_data)
+        fout.write(E1_TRL_MAGIC)
+        fout.write(put_le64(len(bin_data)))
+        fout.write(put_le32(crc))
+        fout.write(put_le32(namelen))
+        fout.write(name.encode())
+
+    os.chmod(out, 0o755)
+    print(f"已生成 X11/Wayland 包装器（自动 chmod +x）：{out}")
+    print(f"  运行：{out}   # 自动解包内嵌的 {args.binary} 后启动")
+    return 0
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="e1wxfly",
+        description="e1LibreOS 应用包装工具（类似 WineBotter / Wineskin）",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    sub = parser.add_subparsers(dest="cmd")
+
+    p_elf = sub.add_parser("elf", help="EXE → Linux 自解压 ELF")
+    p_elf.add_argument("exe", help="输入 EXE 文件")
+    p_elf.add_argument("-n", "--name", help="应用名")
+    p_elf.add_argument("-o", "--output", help="输出路径")
+
+    p_app = sub.add_parser("app", help="EXE → macOS .app 应用包")
+    p_app.add_argument("exe", help="输入 EXE 文件")
+    p_app.add_argument("-n", "--name", help="应用名")
+    p_app.add_argument("-i", "--icon", help=".icns 图标")
+    p_app.add_argument("-o", "--output", help="输出路径")
+
+    p_x11 = sub.add_parser("wrap-x11", help="包装 X11/Wayland 应用")
+    p_x11.add_argument("binary", help="应用二进制或脚本")
+    p_x11.add_argument("-n", "--name", help="应用名")
+    p_x11.add_argument("-o", "--output", help="输出路径")
+
+    args = parser.parse_args()
+    if not args.cmd:
+        parser.print_help()
+        return 1
+
+    if args.cmd == "elf":
+        return cmd_elf(args)
+    elif args.cmd == "app":
+        return cmd_app(args)
+    elif args.cmd == "wrap-x11":
+        return cmd_wrap_x11(args)
+    return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

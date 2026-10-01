@@ -114,8 +114,8 @@ enum {
     S_APP_FINDER, S_APP_SETTINGS, S_APP_ABOUT, S_APP_SYS, S_APP_ACTIVITY,
     S_APP_DISKUTIL, S_APP_CONSOLE, S_APP_TERM, S_APP_BROWSER, S_APP_PKG,
     S_APP_CALC, S_APP_CALENDAR, S_APP_CLOCK, S_APP_NOTES, S_APP_REMIND,
-    S_APP_CONTACTS, S_APP_WEATHER, S_APP_STOCKS, S_APP_DICT, S_APP_FINDMY,
-    S_APP_SCRIPT, S_APP_AIRPORT, S_APP_SHOT, S_APP_INSTALL,
+    S_APP_FINDMY, S_APP_SCRIPT, S_APP_AIRPORT, S_APP_SHOT, S_APP_INSTALL,
+    S_APP_X11,
     S_MENU_HINT, S_BOTTOM_HINT, S_BACK, S_LANG_SW,
     S_ABOUT_D1, S_ABOUT_D2, S_ABOUT_GFX, S_ABOUT_LIC,
     S_HOST, S_CPU, S_MEM, S_UPTIME, S_GFX, S_SELFMADE,
@@ -144,15 +144,12 @@ static const char *S[S_COUNT][2] = {
     [S_APP_CLOCK]   = { "时钟",             "Clock" },
     [S_APP_NOTES]   = { "备忘录",           "Notes" },
     [S_APP_REMIND]  = { "提醒事项",         "Reminders" },
-    [S_APP_CONTACTS]={ "通讯录",           "Contacts" },
-    [S_APP_WEATHER] = { "天气",             "Weather" },
-    [S_APP_STOCKS]  = { "股市",             "Stocks" },
-    [S_APP_DICT]    = { "词典",             "Dictionary" },
     [S_APP_FINDMY]  = { "查找",             "Find" },
     [S_APP_SCRIPT]  = { "脚本编辑器",       "Script Editor" },
     [S_APP_AIRPORT] = { "AirPort 实用工具", "AirPort Utility" },
     [S_APP_SHOT]    = { "截屏",             "Screenshot" },
     [S_APP_INSTALL] = { "安装 e1LibreOS",   "Install e1LibreOS" },
+    [S_APP_X11]     = { "X11 应用",         "X11 Apps" },
     [S_MENU_HINT] = { "j/k 选择 · 回车打开 · L 语言",
                       "j/k select · Enter open · L lang" },
     [S_BOTTOM_HINT] = { "Alt+F2: 文字控制台   ttyS0: 串口",
@@ -179,12 +176,12 @@ static const char *S[S_COUNT][2] = {
     [S_TERM_HINT2]= { "键入的命令直接被 /bin/sh 执行", "Commands run via /bin/sh" },
     [S_BR_URL]    = { "地址",       "Address" },
     [S_BR_GO]     = { "回车: 打开", "Enter: open" },
-    [S_BR_HINT]   = { "示例: http://example.com  http://10.0.2.2:8000/",
-                      "Examples: http://example.com  http://10.0.2.2:8000/" },
+    [S_BR_HINT]   = { "示例: https://example.com  http://example.com  http://10.0.2.2:8000/",
+                      "Examples: https://example.com  http://example.com  http://10.0.2.2:8000/" },
     [S_BR_LOADING]= { "加载中…",   "Loading…" },
     [S_BR_EMPTY]  = { "（空白页面）", "(empty page)" },
     [S_BR_ERR]    = { "无法打开地址：",  "Failed to open: " },
-    [S_BR_HOME]   = { "主页: http://example.com", "Home: http://example.com" },
+    [S_BR_HOME]   = { "主页: https://example.com", "Home: https://example.com" },
     [S_BR_LINK_HINT]={ "链接按数字 + 回车 跳转: [1]  首屏 0",
                       "Links: [N]+Enter — press 0 for top of page" },
     [S_INSTALL_TIP]={ "数据将被擦除，请提前备份",
@@ -459,8 +456,8 @@ enum {
     APP_FINDER = 0, APP_SETTINGS, APP_ABOUT, APP_SYS, APP_ACTIVITY,
     APP_DISKUTIL, APP_CONSOLE, APP_TERM, APP_BROWSER, APP_PKG,
     APP_CALC, APP_CALENDAR, APP_CLOCK, APP_NOTES, APP_REMIND,
-    APP_CONTACTS, APP_WEATHER, APP_STOCKS, APP_DICT, APP_FINDMY,
-    APP_SCRIPT, APP_AIRPORT, APP_SHOT, APP_INSTALL, APP_COUNT
+    APP_FINDMY, APP_SCRIPT, APP_AIRPORT, APP_SHOT, APP_INSTALL,
+    APP_X11, APP_COUNT
 };
 
 /* 可见应用数：两种图形变体均在启动器中显示全部应用
@@ -839,43 +836,6 @@ static void script_run(void)
     ui_mode = 1;
 }
 
-/* ---- 内置词典（离线中英小词典，输入即查） ---- */
-static const char *dict_pairs[][2] = {
-    {"hello", "你好"}, {"world", "世界"}, {"computer", "计算机"}, {"file", "文件"},
-    {"folder", "文件夹"}, {"system", "系统"}, {"network", "网络"}, {"screen", "屏幕"},
-    {"keyboard", "键盘"}, {"mouse", "鼠标"}, {"window", "窗口"}, {"terminal", "终端"},
-    {"package", "软件包"}, {"kernel", "内核"}, {"memory", "内存"}, {"disk", "磁盘"},
-    {"battery", "电池"}, {"cloud", "云"}, {"music", "音乐"}, {"photo", "照片"},
-    {"clock", "时钟"}, {"calendar", "日历"}, {"mail", "邮件"}, {"map", "地图"},
-    {"game", "游戏"}, {"book", "图书"}, {"note", "备忘录"}, {"weather", "天气"},
-    {"你好", "hello"}, {"世界", "world"}, {"计算机", "computer"}, {"文件", "file"},
-    {"系统", "system"}, {"网络", "network"}, {"终端", "terminal"}, {"内核", "kernel"},
-    {"内存", "memory"}, {"磁盘", "disk"}, {"时钟", "clock"}, {"日历", "calendar"},
-    {"天气", "weather"}, {"邮件", "mail"}, {"游戏", "game"}, {"备忘录", "note"},
-    {0, 0}
-};
-
-static void app_dict_lookup(void)
-{
-    int i, hits = 0;
-    if (ui_il == 0) return;
-    add_line("");
-    for (i = 0; dict_pairs[i][0]; i++) {
-        if (strncmp(dict_pairs[i][0], ui_in, ui_il) == 0 ||
-            strncmp(dict_pairs[i][1], ui_in, ui_il) == 0) {
-            char row[160];
-            snprintf(row, sizeof row, "  %s  =  %s",
-                     dict_pairs[i][0], dict_pairs[i][1]);
-            add_line(row);
-            hits++;
-        }
-    }
-    if (!hits) add_line(lang ? "  (no match - offline mini dictionary)"
-                             : "  （无匹配 —— 离线迷你词典）");
-    ui_il = 0; ui_in[0] = 0;
-    dirty = 1;
-}
-
 /* ---- 截屏：当前帧缓冲转存 PPM ---- */
 static void shot_save(void)
 {
@@ -952,52 +912,19 @@ static void app_open_custom(int app)
                 "echo '(no wireless device)'; echo; echo '== /proc/net/dev =='; "
                 "cat /proc/net/dev 2>/dev/null");
         break;
-    case APP_CONTACTS: {
-        static const char *demo[][2] = {
-            {"e1 团队",  "support@e1libreos.local"},
-            {"张三",     "138-0000-0001"},
-            {"Alice",    "+1 555-0101"},
-            {"Bob",      "+1 555-0102"},
-            {"王芳",     "139-0000-0002"},
-            {"李雷",     "137-0000-0003"},
-            {0, 0}
-        };
-        int i;
-        add_line(lang ? "Contacts (offline demo)" : "通讯录（离线演示）");
+    case APP_X11: {
+        add_line(lang ? "X11 / Wayland Applications" : "X11 / Wayland 应用");
         add_line("");
-        for (i = 0; demo[i][0]; i++) {
-            char row[128];
-            snprintf(row, sizeof row, "  %-12s %s", demo[i][0], demo[i][1]);
-            add_line(row);
-        }
+        add_line(lang ? "  Install X11 apps via e1pkg or apk:" : "  通过 e1pkg 或 apk 安装 X11 应用:");
+        add_line("    e1pkg install firefox");
+        add_line("    apk add firefox");
+        add_line("");
+        add_line(lang ? "  Run with: e1wxfly wrap-x11 <binary>" : "  运行方式: e1wxfly wrap-x11 <二进制>");
+        add_line("");
+        add_line(lang ? "  Installed X11 apps:" : "  已安装的 X11 应用:");
+        capture("ls /usr/bin/firefox /usr/bin/chromium /usr/bin/xterm /usr/bin/gimp 2>/dev/null; echo; ls /usr/bin/x11* 2>/dev/null | head -10");
         break;
     }
-    case APP_WEATHER:
-        add_line(lang ? "Weather (offline demo)" : "天气（离线演示）");
-        add_line("");
-        add_line(lang ? "  Beijing   cloudy   18 ~ 26 C" : "  北京       多云     18 ~ 26 C");
-        add_line(lang ? "  Shanghai  rain     21 ~ 24 C" : "  上海       小雨     21 ~ 24 C");
-        add_line(lang ? "  Shenzhen  sunny    26 ~ 32 C" : "  深圳       晴       26 ~ 32 C");
-        add_line(lang ? "  Hangzhou  overcast 20 ~ 27 C" : "  杭州       阴       20 ~ 27 C");
-        add_line("");
-        add_line(lang ? "  (live data requires a network app)"
-                      : "  （实时天气需联网应用支持）");
-        break;
-    case APP_STOCKS:
-        add_line(lang ? "Stocks (offline demo)" : "股市（离线演示）");
-        add_line("");
-        add_line("  AAPL   189.45  +0.82%");
-        add_line("  GOOG   142.10  -0.31%");
-        add_line("  000001  3102.5  +0.45%");
-        add_line("  600519  1688.0  +1.12%");
-        add_line("");
-        add_line(lang ? "  (quotes are static samples)" : "  （报价为静态样例）");
-        break;
-    case APP_DICT:
-        add_line(lang ? "Dictionary (offline mini)" : "词典（离线迷你版）");
-        add_line(lang ? "type a word/Chinese, Enter to search"
-                      : "输入英文单词或中文，回车查询");
-        break;
     case APP_FINDMY:
         add_line(lang ? "Find - local filename search" : "查找 —— 本地文件名搜索");
         add_line(lang ? "keyword, Enter: find / -name '*kw*'"
@@ -1159,10 +1086,6 @@ static void app_key_custom(int k)
     case APP_SHOT:
         if (k == '\r' || k == '\n' || k == ' ') shot_save();
         else if (k == 27 || k == 'q') app_close();
-        break;
-    case APP_DICT:
-        if (k == 27 || k == 'q') app_close();
-        else ui_input_key(ui_in, &ui_il, sizeof ui_in - 1, k, app_dict_lookup);
         break;
     case APP_FINDMY:
         if (k == 27 || k == 'q') app_close();
@@ -1431,7 +1354,6 @@ static int app_draw_custom(int wx, int wy, int ww, int bottom)
         if (ui_msg[0]) text(wx + 10, y, ui_msg, C_ACCENT, SCALE_TXT);
         return 1;
     }
-    case APP_DICT:
     case APP_FINDMY: {
         draw_lines_region(wx, y, y + line_h * 2);
         draw_input_box(wx + 10, y + line_h * 2 + 2, ww - 20, "> ");
@@ -1783,7 +1705,31 @@ static void app_br_fetch(const char *url_in)
     scroll = 0;
     snprintf(url, sizeof url, "%s", url_in);
 
-    /* 解析 http://host[:port]/path（仅 http） */
+    /* 解析 http://host[:port]/path 或 https://host[:port]/path */
+    if (strncmp(url, "https://", 8) == 0) {
+        /* HTTPS 支持：通过 openssl s_client 中转 */
+        char cmd[512], *p = url + 8, *q;
+        char host[128] = "", path[256] = "/";
+        int port = 443;
+        q = strchr(p, '/');
+        if (q) { snprintf(path, sizeof path, "%s", q); *q = 0; }
+        else path[0] = '/', path[1] = 0;
+        q = strchr(p, ':');
+        if (q) { port = atoi(q + 1); *q = 0; }
+        snprintf(host, sizeof host, "%s", p);
+        if (!host[0]) { add_line(L(S_BR_ERR)); dirty = 1; return; }
+        add_line(L(S_BR_LOADING));
+        dirty = 1; redraw(); dirty = 0;
+        snprintf(cmd, sizeof cmd,
+            "printf 'GET %s HTTP/1.0\\r\\nHost: %s\\r\\nUser-Agent: e1Browser/1.0\\r\\nAccept: text/html\\r\\nConnection: close\\r\\n\\r\\n' | "
+            "openssl s_client -connect %s:%d -servername %s -quiet 2>/dev/null",
+            path, host, host, port, host);
+        free_lines(); scroll = 0;
+        snprintf(br_cur_url, sizeof br_cur_url, "%s", url);
+        capture(cmd);
+        dirty = 1;
+        return;
+    }
     if (strncmp(url, "http://", 7) != 0) {
         char e[320];
         snprintf(e, sizeof e, "%s%s", L(S_BR_ERR), url);
@@ -1878,7 +1824,7 @@ static void app_br_fetch(const char *url_in)
 static void app_br_start(void)
 {
     if (!br_input[0])
-        snprintf(br_input, sizeof br_input, "http://example.com");
+        snprintf(br_input, sizeof br_input, "https://example.com");
     br_input_len = strlen(br_input);
     add_line(L(S_BR_HINT));
     add_line(L(S_BR_LINK_HINT));
@@ -2001,12 +1947,12 @@ static const u32 app_icon_col[APP_COUNT] = {
     0x1e90d8, 0x8e8e93, 0x5a6472, 0x5856d6, 0x30d158, 0x64d2ff, 0x1c1c1e,
     /* Term   Browser  pkg */
     0x2d2d30, 0x0a84ff, 0xbf5af2,
-    /* Calc   Calendar Clock  Notes  Remind Contacts */
-    0xff9500, 0xff3b30, 0x5ac8fa, 0xffe29b, 0xfff3b0, 0xc7c7cc,
-    /* Weather Stocks Dict   Find   Script AirPort */
-    0x4f9cf9, 0x1c1c1e, 0xff3b30, 0x34c759, 0xbf5af2, 0x0a84ff,
-    /* Shot   Install */
-    0x8e8e93, 0x30b0c7
+    /* Calc   Calendar Clock  Notes  Remind */
+    0xff9500, 0xff3b30, 0x5ac8fa, 0xffe29b, 0xfff3b0,
+    /* Find   Script AirPort Shot   Install */
+    0x34c759, 0xbf5af2, 0x0a84ff, 0x8e8e93, 0x30b0c7,
+    /* X11 */
+    0x7f8c8d
 };
 
 static void draw_app_icon(int x, int y, int size, int app, u32 label_col)
@@ -2014,7 +1960,7 @@ static void draw_app_icon(int x, int y, int size, int app, u32 label_col)
     char glyph[2];
     int scale = size >= 56 ? 3 : 2;
     fill_round(x, y, size, size, size / 5, app_icon_col[app]);
-    glyph[0] = "F#iI~DC>WP+c@NvB*$L/{Aod"[app];
+    glyph[0] = "F#iI~DC>WP+c@Nv?ASs!X"[app];
     glyph[1] = 0;
     text(x + (size - text_w(glyph, scale)) / 2,
          y + (size - 8 * scale) / 2, glyph, label_col, scale);

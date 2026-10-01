@@ -13,11 +13,12 @@ e1LibreOS 1.0 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 
 - **双架构**：x86_64（BIOS + UEFI 双引导 ISO）、aarch64（UEFI 原始 `.img`）
 - **自研生态**
   - [e1pkg](rootfs/usr/bin/e1pkg)：dnf 风格包管理器（后序遍历依赖解析 + 反向依赖保护）
-  - [e1wine](src/e1wine/e1wine.c)：把 Windows EXE 转换为 macOS `.app` / Linux 自解压 ELF / 通用 Unix 程序
+  - [e1wine](src/e1wine/e1wine.c)：轻量 Win32 PE 兼容层（运行/分析 PE 文件）
+  - [e1wxfly](src/e1wxfly/e1wxfly)：应用包装工具（EXE→ELF/.app、X11/Wayland 应用封装）
   - [e1gpt](src/e1gpt)：零依赖 GPT 分区工具
   - [e1apk](src/e1apk)：APK 打包工具
-- **24 个内置图形应用**：访达 Finder、系统设置、终端、e1 浏览器、计算器、日历、时钟、备忘录、
-  活动监视器、磁盘工具、天气、截屏、安装器等
+- **21 个内置图形应用**：访达 Finder、系统设置、终端、e1 浏览器（HTTP/HTTPS）、计算器、日历、
+  时钟、备忘录、活动监视器、磁盘工具、截屏、安装器、X11 应用支持等
 - **安装器 [setup-e1os](rootfs/usr/sbin/setup-e1os)**：问答流程与 Alpine `setup-alpine` 逐项对齐，
   支持五种安装模式（见 [docs/INSTALL.md](docs/INSTALL.md)）
 

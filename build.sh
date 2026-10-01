@@ -293,6 +293,15 @@ else
 fi
 [ -f rootfs/usr/bin/e1wine ] && chmod +x rootfs/usr/bin/e1wine
 
+# ---------------------------------------------------------------- e1wxfly（应用包装工具，Python 脚本）
+# 从 e1wine 分离出来的独立工具：把 EXE/X11 应用包装为 ELF/.app/自解压脚本
+rm -f rootfs/usr/bin/e1wxfly
+if [ -f src/e1wxfly/e1wxfly ]; then
+    cp src/e1wxfly/e1wxfly rootfs/usr/bin/e1wxfly
+    chmod +x rootfs/usr/bin/e1wxfly
+    msg "安装 e1wxfly 应用包装工具"
+fi
+
 # ---------------------------------------------------------------- e1gpt（安装器 GPT 分区工具）
 # setup-e1os 的 custom/sys(EFI)/data 模式用它写保护性 MBR + GPT（ESP/Linux/swap 类型 GUID）
 rm -f rootfs/usr/sbin/e1gpt
@@ -323,7 +332,7 @@ msg "组装 stage 根文件系统"
 # 统一修复执行权限（init 脚本无 +x 会导致 busybox init 无法启动系统）
 chmod +x rootfs/init rootfs/etc/rc.init rootfs/etc/rc.shutdown \
         rootfs/bin/autologin rootfs/usr/bin/e1pkg rootfs/usr/bin/e1demo \
-        rootfs/usr/bin/e1wm-start \
+        rootfs/usr/bin/e1wm-start rootfs/usr/bin/e1wxfly \
         rootfs/etc/udhcpc.script rootfs/usr/sbin/setup-e1os \
         rootfs/usr/sbin/e1os-commit rootfs/usr/sbin/e1gpt 2>/dev/null || true
 
