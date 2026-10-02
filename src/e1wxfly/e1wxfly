@@ -25,94 +25,112 @@ def crc32(data: bytes) -> int:
 def put_le64(v): return struct.pack("<Q", v)
 def put_le32(v): return struct.pack("<I", v)
 
-def find_self_payload(self_path: str):
-    """在自身文件尾部查找 E1WXFLY1 trailer"""
-    try:
-        with open(self_path, "rb") as f:
-            f.seek(0, 2)
-            fsz = f.tell()
-            if fsz < E1_TRL_FIXED:
-                return None
-            f.seek(max(0, fsz - 4096))
-            tail = f.read(4096)
-            for scan in range(len(tail) - E1_TRL_FIXED, -1, -1):
-                if tail[scan:scan+8] != E1_TRL_MAGIC:
-                    continue
-                sz = struct.unpack("<Q", tail[scan+8:scan+16])[0]
-                crc = struct.unpack("<I", tail[scan+16:scan+20])[0]
-                nl = struct.unpack("<I", tail[scan+20:scan+24])[0]
-                if nl > 128:
-                    continue
-                if scan + E1_TRL_FIXED + nl != len(tail):
-                    continue
-                if sz + E1_TRL_FIXED + nl > fsz:
-                    continue
-                name = tail[scan+24:scan+24+nl].decode("utf-8", "replace")
-                off = fsz - (E1_TRL_FIXED + nl) - sz
-                return {"off": off, "size": sz, "crc": crc, "name": name}
-    except Exception:
-        pass
-    return None
-
-def extract_self_payload(self_path: str, pl: dict, out_dir: str):
-    """把内嵌载荷解到 out_dir，自动 chmod +x"""
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, pl["name"])
-    if os.path.exists(out_path) and os.path.getsize(out_path) == pl["size"]:
-        os.chmod(out_path, 0o755)
-        return out_path
-    tmp = os.path.join(out_dir, f".tmp-{os.getpid()}")
-    with open(self_path, "rb") as fin, open(tmp, "wb") as fout:
-        fin.seek(pl["off"])
-        remain = pl["size"]
-        while remain > 0:
-            chunk = fin.read(min(65536, remain))
-            if not chunk:
-                break
-            fout.write(chunk)
-            remain -= len(chunk)
-    os.chmod(tmp, 0o755)
-    os.rename(tmp, out_path)
-    return out_path
-
 # ---------------------------------------------------------------------------
-# convert --elf
+# elf — 自包含 Linux 包装器
+#
+# 产物布局（单个可执行 shell 脚本，自动 chmod 0755）：
+#   [shell 头 + heredoc Python，Python 中内嵌 base64(e1wine ELF)]
+#   [原始 EXE 字节]
+#   [E1WXFLY1 trailer: u64 size | u32 crc | u32 namelen | name]
+# 运行时 Python 从自身尾部读出 EXE、从内嵌 b64 还原 e1wine，
+# 解到 ~/.cache/e1wxfly/ 后 execv —— 不依赖目标机预装任何东西（除 python3）。
 # ---------------------------------------------------------------------------
+
+ELF_WRAPPER_HEAD = '''#!/bin/sh
+# e1wxfly self-extracting Linux wrapper (generated, do not edit)
+SELF="$0"
+CACHEDIR="${XDG_CACHE_HOME:-$HOME/.cache}/e1wxfly"
+mkdir -p "$CACHEDIR" 2>/dev/null || CACHEDIR="/tmp/e1wxfly-$$"
+mkdir -p "$CACHEDIR"
+exec python3 - "$SELF" "$CACHEDIR" "$@" <<'PYEOF'
+import os, sys, struct, zlib, base64
+
+E1WINE_B64 = b"@@EWINE_B64@@"
+E1WINE_CRC = @@EWINE_CRC@@
+MAGIC = b"E1WXFLY1"; FIXED = 24
+
+self_path, cache = sys.argv[1], sys.argv[2]
+fwd = sys.argv[3:]
+
+def unpack(path, data, crc_expected):
+    if not (os.path.exists(path) and os.path.getsize(path) == len(data)
+            and (zlib.crc32(open(path, "rb").read()) & 0xffffffff) == crc_expected):
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o755)
+        os.rename(tmp, path)
+    os.chmod(path, 0o755)
+
+# 1) e1wine 运行时（base64 内嵌）
+ew = base64.b64decode(E1WINE_B64)
+ew_path = os.path.join(cache, "e1wine-%08x" % E1WINE_CRC)
+if (zlib.crc32(ew) & 0xffffffff) != E1WINE_CRC:
+    sys.exit("e1wxfly: embedded e1wine corrupted")
+unpack(ew_path, ew, E1WINE_CRC)
+
+# 2) 自身尾部的 EXE
+blob = open(self_path, "rb").read()
+i = blob.rfind(MAGIC)
+if i < 0 or i + FIXED > len(blob):
+    sys.exit("e1wxfly: payload trailer missing")
+size, crc, nl = struct.unpack("<QII", blob[i+8:i+FIXED])
+name = blob[i+FIXED:i+FIXED+nl].decode("utf-8", "replace")
+if i + FIXED + nl != len(blob) or size + FIXED + nl > len(blob):
+    sys.exit("e1wxfly: bad payload layout")
+off = len(blob) - (FIXED + nl) - size
+exe = blob[off:off+size]
+if (zlib.crc32(exe) & 0xffffffff) != crc:
+    sys.exit("e1wxfly: payload CRC mismatch")
+exe_path = os.path.join(cache, "%08x-%s" % (crc, name))
+unpack(exe_path, exe, crc)
+
+os.execv(ew_path, [ew_path, exe_path] + fwd)
+PYEOF
+'''
 
 def cmd_elf(args):
     launcher = os.environ.get("E1WINE_ELF_LAUNCHER", "")
     if not launcher:
-        for cand in ("e1wine-linux-x86_64", "./e1wine-linux-x86_64"):
+        for cand in ("e1wine-linux-x86_64", "./e1wine-linux-x86_64",
+                     "dist/e1wine-linux-x86_64"):
             if os.path.isfile(cand) and os.access(cand, os.X_OK):
                 launcher = cand
                 break
     if not launcher:
         print("e1wxfly: 找不到 Linux ELF 版 e1wine 作为包装器。", file=sys.stderr)
-        print("  请设置 E1WINE_ELF_LAUNCHER 或把 e1wine-linux-x86_64 放到当前目录。", file=sys.stderr)
+        print("  请设置 E1WINE_ELF_LAUNCHER，或把 e1wine-linux-x86_64 放到当前目录 / dist/。",
+              file=sys.stderr)
         return 1
 
     name = args.name or os.path.splitext(os.path.basename(args.exe))[0] or "program"
     out = args.output or f"./{name}-linux"
 
-    shutil.copy2(launcher, out)
+    with open(launcher, "rb") as f:
+        ewine = f.read()
+    with open(args.exe, "rb") as f:
+        exe_data = f.read()
+
+    import base64
+    head = (ELF_WRAPPER_HEAD
+            .replace("@@EWINE_B64@@", base64.b64encode(ewine).decode("ascii"))
+            .replace("@@EWINE_CRC@@", str(crc32(ewine)))
+            ).encode()
+
+    exe_crc = crc32(exe_data)
+    name_b = name.encode()
+    with open(out, "wb") as f:
+        f.write(head)
+        f.write(exe_data)
+        f.write(E1_TRL_MAGIC)
+        f.write(put_le64(len(exe_data)))
+        f.write(put_le32(exe_crc))
+        f.write(put_le32(len(name_b)))
+        f.write(name_b)
     os.chmod(out, 0o755)
-
-    with open(args.exe, "rb") as fin:
-        exe_data = fin.read()
-    crc = crc32(exe_data)
-    namelen = len(name.encode())
-
-    with open(out, "ab") as fout:
-        fout.write(exe_data)
-        fout.write(E1_TRL_MAGIC)
-        fout.write(put_le64(len(exe_data)))
-        fout.write(put_le32(crc))
-        fout.write(put_le32(namelen))
-        fout.write(name.encode())
-
-    os.chmod(out, 0o755)
-    print(f"已生成自解压 Linux 程序（自动 chmod +x）：{out}")
-    print(f"  运行：{out}   # 自动解包内嵌的 {args.exe} 后由 e1wine 加载")
+    print(f"已生成自包含 Linux 程序（自动 chmod +x）：{out}")
+    print(f"  内含 e1wine({len(ewine)}B) + {args.exe}({len(exe_data)}B)")
+    print(f"  运行：{out}   # 解包到 ~/.cache/e1wxfly/ 后由 e1wine 加载")
     return 0
 
 # ---------------------------------------------------------------------------
@@ -182,33 +200,53 @@ def cmd_app(args):
 # wrap-x11 — 包装第三方 X11/Wayland 应用
 # ---------------------------------------------------------------------------
 
-X11_WRAPPER_TEMPLATE = """#!/bin/sh
-# e1wxfly X11/Wayland 包装器 — 自动解包内嵌应用并启动
-# 由 e1wxfly wrap-x11 生成
-
+X11_WRAPPER_TEMPLATE = '''#!/bin/sh
+# e1wxfly X11/Wayland 自解压包装器 — 由 e1wxfly wrap-x11 生成
+# 尾部内嵌应用二进制 + E1WXFLY1 trailer；首次运行解包后 exec。
 SELF="$0"
 CACHEDIR="${XDG_CACHE_HOME:-$HOME/.cache}/e1wxfly"
+mkdir -p "$CACHEDIR" 2>/dev/null || CACHEDIR=/tmp/e1wxfly-$$
 mkdir -p "$CACHEDIR"
 
-# 提取内嵌载荷（Python 脚本处理 trailer）
-EXTRACTED=$(python3 -c "
-import sys, os, struct
-sys.path.insert(0, os.path.dirname(os.path.abspath('$SELF')))
-from e1wxfly import find_self_payload, extract_self_payload
-pl = find_self_payload('$SELF')
-if pl:
-    out = extract_self_payload('$SELF', pl, '$CACHEDIR')
-    print(out)
-" 2>/dev/null)
+EXTRACTED=$(SELF="$SELF" CACHEDIR="$CACHEDIR" python3 - <<'PYEOF'
+import os, struct, zlib, sys
+self_path = os.environ["SELF"]; cache = os.environ["CACHEDIR"]
+MAGIC = b"E1WXFLY1"; FIXED = 24
+data = open(self_path, "rb").read()
+i = data.rfind(MAGIC)
+if i < 0 or i + FIXED > len(data):
+    sys.exit(1)
+size, crc, nl = struct.unpack("<QII", data[i+8:i+FIXED])
+name = data[i+FIXED:i+FIXED+nl].decode("utf-8", "replace")
+if i + FIXED + nl != len(data) or size + FIXED + nl > len(data):
+    sys.exit(1)
+off = len(data) - (FIXED + nl) - size
+blob = data[off:off+size]
+if (zlib.crc32(blob) & 0xffffffff) != crc:
+    sys.exit(1)
+out = os.path.join(cache, "%08x-%s" % (crc, name))
+if not (os.path.exists(out) and os.path.getsize(out) == size):
+    tmp = out + ".tmp"
+    open(tmp, "wb").write(blob)
+    os.chmod(tmp, 0o755)
+    os.rename(tmp, out)
+os.chmod(out, 0o755)
+print(out)
+PYEOF
+)
 
 if [ -z "$EXTRACTED" ] || [ ! -x "$EXTRACTED" ]; then
-    echo "e1wxfly: 无法解包内嵌载荷" >&2
+    echo "e1wxfly: failed to unpack embedded application" >&2
     exit 1
 fi
 
-# 启动 X11/Wayland 应用
+# 若需要 X 显示而 DISPLAY/WAYLAND_DISPLAY 均未设置，给出明确提示
+if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    echo "e1wxfly: no X11/Wayland display (DISPLAY/WAYLAND_DISPLAY unset)" >&2
+fi
+
 exec "$EXTRACTED" "$@"
-"""
+'''
 
 def cmd_wrap_x11(args):
     name = args.name or os.path.splitext(os.path.basename(args.binary))[0] or "app"

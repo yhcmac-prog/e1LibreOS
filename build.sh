@@ -47,6 +47,30 @@ fetch() { # <url> <out>
 }
 
 mkdir -p "$DL" "$BUILD"
+
+# E1OS_NO_CC=1：跳过全部 C 交叉编译，沿用 build/cc-cache/$ARCH 中已编译好的二进制
+# 用于交叉编译器缺失/卡死的环境（缓存由此前一次正常构建自动填充）。
+NO_CC="${E1OS_NO_CC:-}"
+CCCACHE="$BUILD/cc-cache/$ARCH"
+if [ -n "$NO_CC" ]; then
+    mkdir -p "$CCCACHE/usr/bin" "$CCCACHE/usr/sbin" "$CCCACHE/usr/share/e1wine"
+    for f in usr/bin/e1wm usr/bin/e1wine usr/sbin/e1gpt usr/bin/e1apk; do
+        [ -f "rootfs/$f" ] && [ ! -f "$CCCACHE/$f" ] && cp "rootfs/$f" "$CCCACHE/$f"
+    done
+fi
+# keep_cc <相对路径>：NO_CC 模式从缓存恢复二进制，成功返回 0
+keep_cc() {
+    [ -n "$NO_CC" ] || return 1
+    if [ -f "$CCCACHE/$1" ]; then
+        mkdir -p "$(dirname "rootfs/$1")"
+        cp "$CCCACHE/$1" "rootfs/$1"; chmod +x "rootfs/$1"
+        msg "E1OS_NO_CC: 沿用已编译的 $1"
+        return 0
+    fi
+    msg "E1OS_NO_CC: 缓存中无 $1，该组件本次缺失"
+    return 1
+}
+
 # 内核与驱动模块统一来自 Alpine linux-virt 包（版本自洽，模块 vermagic 一致）
 # 镜像优先级：阿里云（对 wget/curl UA 均友好）-> 官方 dl-cdn
 for mirror in https://mirrors.aliyun.com/alpine https://dl-cdn.alpinelinux.org/alpine; do
@@ -252,7 +276,9 @@ if [ ! -x "$ZIG" ] && [ ! -x "$GCC_X" ]; then
     fi
 fi
 rm -f rootfs/usr/bin/e1wm
-if [ -x "$ZIG" ]; then
+if keep_cc usr/bin/e1wm; then
+    :
+elif [ -x "$ZIG" ]; then
     msg "交叉编译自研图形界面 e1wm (zig cc + musl 静态, $ARCH)"
     "$ZIG" cc -target "$ZTARGET" -Os -s -static \
         -o rootfs/usr/bin/e1wm src/fbui/e1wm.c || die "e1wm 编译失败"
@@ -273,7 +299,9 @@ fi
 # 纯 C，无图形依赖，全变体内置：可在 e1LibreOS 上运行直接调用 kernel32 的 PE32+ EXE。
 # Linux(musl 静态) 与 macOS(原生) 共用同一源码，由 tools/build-e1wine.sh 切换目标。
 rm -f rootfs/usr/bin/e1wine
-if [ -x "$ZIG" ]; then
+if keep_cc usr/bin/e1wine; then
+    :
+elif [ -x "$ZIG" ]; then
     msg "交叉编译 e1wine Linux 版 (zig cc + musl 静态, $ARCH)"
     EW_TARGET=linux; [ "$ARCH" = aarch64 ] && EW_TARGET=linux-arm64
     sh tools/build-e1wine.sh "$EW_TARGET" rootfs/usr/bin/e1wine || die "e1wine 编译失败"
@@ -305,7 +333,9 @@ fi
 # ---------------------------------------------------------------- e1gpt（安装器 GPT 分区工具）
 # setup-e1os 的 custom/sys(EFI)/data 模式用它写保护性 MBR + GPT（ESP/Linux/swap 类型 GUID）
 rm -f rootfs/usr/sbin/e1gpt
-if [ -x "$ZIG" ]; then
+if keep_cc usr/sbin/e1gpt; then
+    :
+elif [ -x "$ZIG" ]; then
     msg "交叉编译 e1gpt 分区工具 (zig cc + musl 静态, $ARCH)"
     "$ZIG" cc -target "$ZTARGET" -Os -s -static \
         -o rootfs/usr/sbin/e1gpt src/e1gpt/e1gpt.c || die "e1gpt 编译失败"
@@ -316,7 +346,9 @@ fi
 
 # ---------------------------------------------------------------- e1apk（APK 工具 + AXML 清单解析）
 # 自研 ZIP 解包（免 zlib）+ 二进制 AXML 清单解析；生成演示 APK 随 ISO 分发
-if [ -x "$ZIG" ]; then
+if keep_cc usr/bin/e1apk; then
+    :
+elif [ -x "$ZIG" ]; then
     msg "交叉编译 e1apk APK 工具 (zig cc + musl 静态, $ARCH)"
     "$ZIG" cc -target "$ZTARGET" -Os -s -static \
         -DE1APK_PLATFORM='"linux"' \

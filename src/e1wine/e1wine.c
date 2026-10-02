@@ -968,8 +968,6 @@ int main(int argc, char **argv) {
         passthrough_argv = argv + 1;
     }
 
-run_file:
-    ;
     struct pe_image im = {0};
     im.file_map = map_pe_file(file, &im.file_size);
     parse_pe(&im);

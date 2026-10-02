@@ -1,13 +1,26 @@
-# e1wine —— 跨平台 EXE 转换工具
+# e1wine / e1wxfly —— EXE 兼容与应用包装
 
-e1wine 是 e1LibreOS 的 Wine 变种工具。`convert` 子命令把现有的 Windows EXE
-**包装**为目标平台可直接分发的产物（运行时包装，不做机器码静态重编译）：
+e1LibreOS 包含两个互补的工具：
 
-- **Linux ELF**：生成单文件自解压程序，**自动加权 0755**，目标机上直接 `./` 运行
-- **macOS .app**：生成标准应用包（双架构启动器 + EXE 载荷 + Info.plist）
-- **Unix**：用宿主编译器原生构建的通用版（FreeBSD/其它 Unix 可用）
+- **e1wine**：轻量 Win32 PE 兼容层（运行 / 分析 PE32+ 文件），位于
+  [src/e1wine/e1wine.c](../src/e1wine/e1wine.c)
+- **e1wxfly**：应用包装工具（类似 WineBotter / Wineskin），位于
+  [src/e1wxfly/e1wxfly](../src/e1wxfly/e1wxfly)，纯 Python 3 零依赖
 
-## 构建
+## e1wine：PE 兼容层
+
+设计理念同 Wine（Wine Is Not an Emulator）：不模拟 CPU，把 PE32+ 映像直接
+装入进程地址空间，用 `__attribute__((ms_abi))` 桥接 Windows x64 ABI 与宿主
+System V ABI，并提供 kernel32 等 Win32 API 桩。
+
+```sh
+e1wine program.exe [args...]   # 直接运行 Windows PE32+ 程序
+e1wine --info program.exe      # 查看 PE 头 / 节 / 导入表
+e1wine --list program.exe      # 仅列出导入的 DLL
+e1wine --version
+```
+
+构建全平台二进制：
 
 ```sh
 ./tools/build-e1wine.sh all dist
@@ -18,39 +31,34 @@ e1wine 是 e1LibreOS 的 Wine 变种工具。`convert` 子命令把现有的 Win
 | `dist/e1wine-linux-x86_64` | x86_64-linux-musl 全静态，无 glibc 依赖 |
 | `dist/e1wine-linux-aarch64` | aarch64-linux-musl 全静态 |
 | `dist/e1wine-macos-universal` | x86_64 + arm64 双架构 Mach-O |
-| `dist/e1wine-mac-launcher-universal` | .app 内嵌的 universal 启动器 |
 | `dist/e1wine-unix-<sys>-<arch>` | 宿主 cc 原生编译的 Unix 版 |
 
-单目标构建：`./tools/build-e1wine.sh linux dist/e1wine`（或 `linux-arm64` /
-`macos` / `macos-universal` / `unix`）。
+限制：仅 x86_64 PE32+（不支持 32 位 PE / .NET）；仅静态导入表；无 SEH、
+TLS 回调与窗口子系统。复杂 Windows 程序仍建议安装完整 Wine（`apk add wine`）。
 
-## 用法
+## e1wxfly：应用包装
 
-```text
-e1wine convert --elf  [ -n 名称 ] [ -o 输出文件 ] <input.exe>
-e1wine convert --app  [ -n 名称 ] [ -i icon.icns ] [ -o Name.app ] <input.exe>
-e1wine --version
-e1wine --info <file>      查看自解压包内嵌的 EXE 信息
-e1wine --list <file>      列出内嵌载荷
-```
+三种包装模式：
 
-### 1. EXE → Linux 自解压 ELF（自动加权）
+### 1. EXE → 自包含 Linux 程序（自动加权）
 
 ```sh
-./e1wine-linux-x86_64 convert --elf hello.exe -o hello
-# 产物布局: [e1wine ELF][原始 EXE][trailer "E1WINEP1"]
-# 自动 chmod 0755，拷到任意 Linux x86_64 机器即可：
-./hello
+e1wxfly elf hello.exe -o hello
+# 产物是单个可执行 shell 脚本（0755），内含 base64(e1wine) + 原始 EXE
+./hello arg1 arg2
 ```
 
-运行时 e1wine 从自身尾部读出 EXE（CRC32 校验），解包到
-`~/.cache/e1wine/` 并自动 `chmod +x` 后加载执行。全静态 musl 二进制，
-目标机无需安装任何运行库。
+运行时脚本把 e1wine 与 EXE 解到 `~/.cache/e1wxfly/`（按 CRC32 去重，
+自动 `chmod +x`），然后 `exec e1wine <exe>` 并透传全部参数。目标机只需
+有 `python3`（e1LibreOS 自带），无需预装 e1wine 或任何运行库。
+打包时从同目录 / `dist/` 找 `e1wine-linux-x86_64`，也可用
+`E1WINE_ELF_LAUNCHER` 指定。
 
 ### 2. EXE → macOS .app
 
 ```sh
-./e1wine-macos-universal convert --app hello.exe -n Hello -i AppIcon.icns
+E1WINE_MAC_LAUNCHER=./e1wine-mac-launcher-universal \
+  e1wxfly app hello.exe -n Hello -i AppIcon.icns
 open Hello.app
 ```
 
@@ -63,22 +71,22 @@ Hello.app/Contents/Info.plist
 Hello.app/Contents/Resources/AppIcon.icns  # 可选
 ```
 
-启动器在运行时委托系统 Wine 执行 EXE；未安装 Wine 时会弹窗给出安装指引。
-Apple Silicon 需要 Rosetta 2 + Wine（如 Wine Staging / CrossOver）。
+启动器运行时委托系统 Wine 执行 EXE；未安装 Wine 时弹窗给出指引。
+Apple Silicon 需要 Rosetta 2 + Wine（Wine Staging / CrossOver 等）。
 
-### 3. Unix 版
+### 3. X11 / Wayland 应用包装
 
 ```sh
-./tools/build-e1wine.sh unix /usr/local/bin/e1wine   # 用当前平台 cc 原生编译
-e1wine convert --elf app.exe -o app && ./app
+e1wxfly wrap-x11 /usr/bin/firefox -n firefox -o firefox-portable
+./firefox-portable
 ```
 
-`--info` / `--list` 可读取任意自解压包中内嵌 EXE 的名称、大小与 CRC。
+把第三方 X11/Wayland 应用（Firefox、xterm、GIMP 等）与解包启动器合成单文件，
+首次运行自动解包到 `~/.cache/e1wxfly/` 并加权执行。在 e1wm 桌面的
+“X11 应用”入口可查看已安装的 X11 程序（`apk add firefox` 等安装）。
 
-## 说明与限制
+## 说明
 
-- e1wine 是**包装器/加载器**，不包含 PE→ELF 指令翻译；EXE 的实际执行依赖
-  目标机 Wine（macOS/Linux）。
-- Linux x86_64 上推荐安装 Wine：`apk add wine`（或系统对应包）。
-- aarch64 Linux 运行 x86_64 EXE 需要 box64 / qemu-user 级别的用户态模拟。
-- 载荷完整性由 trailer 中的 CRC32 保证；trailer magic 为 `E1WINEP1`。
+- 载荷完整性由 trailer 中的 CRC32 保证；e1wxfly 的 trailer magic 为
+  `E1WXFLY1`（旧版 e1wine convert 为 `E1WINEP1`，已废弃）。
+- aarch64 Linux 运行 x86_64 EXE 仍需 box64 / qemu-user 级别的用户态模拟。
