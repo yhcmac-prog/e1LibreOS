@@ -82,6 +82,7 @@ E1OS_ARCH=aarch64 E1OS_VARIANT=workstation ./build.sh   # aarch64 .img
 - [docs/INSTALL.md](docs/INSTALL.md)：五种安装模式与 `setup-e1os` 问答说明
 - [docs/E1WINE.md](docs/E1WINE.md)：e1wine 跨平台 EXE 转换工具
 - [docs/e1repo.md](docs/e1repo.md)：e1repo 依赖仓库结构与自建方法
+- [CONTRIBUTING.md](CONTRIBUTING.md)：贡献指南（构建、编码规范、提交流程）
 
 ## 源码结构
 

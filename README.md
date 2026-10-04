@@ -98,6 +98,8 @@ E1OS_ARCH=aarch64 E1OS_VARIANT=workstation ./build.sh   # aarch64 .img
 - [docs/E1WINE.md](docs/E1WINE.md): e1wine and e1wxfly cross-platform tools
 - [docs/e1repo.md](docs/e1repo.md): e1repo dependency repository layout and
   how to self-host one
+- [CONTRIBUTING.md](CONTRIBUTING.md): build, coding conventions, and pull
+  request workflow
 
 ## Source layout
 
