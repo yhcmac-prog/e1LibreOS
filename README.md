@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | **English**
 
-e1LibreOS 1.0 (Libre) is a minimal bootable Linux distribution built around the
+e1LibreOS 1.1 (Libre) is a minimal bootable Linux distribution built around the
 Fedora philosophy of free software. Both the kernel and user space come entirely
 from upstream free-software components, and the system images can be
 cross-built on macOS or Linux using plain scripts — no root access required.

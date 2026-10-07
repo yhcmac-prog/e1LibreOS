@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.md)
 
-e1LibreOS 1.0 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 发行版。
+e1LibreOS 1.1 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 发行版。
 内核与用户态全部来自自由软件，系统镜像可在 macOS / Linux 上纯脚本零 root 交叉构建。
 
 ## 特性一览
