@@ -33,6 +33,21 @@ e1wine --version
 | `dist/e1wine-macos-universal` | x86_64 + arm64 双架构 Mach-O |
 | `dist/e1wine-unix-<sys>-<arch>` | 宿主 cc 原生编译的 Unix 版 |
 
+### 现成安装包
+
+运行 `./tools/mkdistpkg.sh <版本>` 可从 `dist/` 打出各平台安装包
+（输出在 `build/distpkg/`）：
+
+| 安装包 | 平台 | 安装方式 |
+|---|---|---|
+| `e1wine-<V>-macos.pkg` | macOS | 双击安装到 `/usr/local/bin` |
+| `e1wine-<V>-macos.dmg` / `.zip` | macOS | 打开后双击 `Install.command` |
+| `e1wine-<V>-linux.tar.gz` | Linux | 解压后 `./install.sh`（按 `uname -m` 挑静态二进制，支持 `PREFIX=`） |
+| `e1wine-<V>-unix-installer.sh` | Unix/BSD | `sudo sh e1wine-<V>-unix-installer.sh [PREFIX]`，POSIX sh 自解压，自动识别 OS/架构，`--uninstall` 卸载 |
+
+所有包均同时安装 e1wine 与 e1wxfly（macOS 包另含 .app 启动器），
+校验和见包目录 `SHA256SUMS.txt`。
+
 限制：仅 x86_64 PE32+（不支持 32 位 PE / .NET）；仅静态导入表；无 SEH、
 TLS 回调与窗口子系统。复杂 Windows 程序仍建议安装完整 Wine（`apk add wine`）。
 
