@@ -247,9 +247,11 @@ static void px(int x, int y, u32 c)
 static void fill(int x, int y, int w, int h, u32 c)
 {
     int i, j;
+    if (x < 0) { w += x; x = 0; }           /* 阴影/圆角越界保护 */
+    if (y < 0) { h += y; y = 0; }
     for (j = y; j < y + h && j < H; j++)
         for (i = x; i < x + w && i < W; i++)
-            fbp[j * W + i] = c;
+            if (i >= 0) fbp[j * W + i] = c;
 }
 
 /* 实心圆（macOS 红绿灯用） */
@@ -356,10 +358,25 @@ static void padto(char *out, size_t n, const char *s, int cells)
 }
 
 /* ================= 应用输出缓冲 ================= */
-
+/*
+ * 多窗口版：每个应用拥有独立的行缓冲与滚动位置，
+ * 焦点切换/最小化不再丢失窗口内容。wbuf_cur 指向当前操作的应用，
+ * lines/nlines/scroll 宏随 set_wbuf() 切换（调用点无需改动）。
+ */
 #define MAXLINES 256
-static char *lines[MAXLINES];
-static int nlines = 0;
+#define APP_MAX  24                    /* 应用数组上限（>= APP_COUNT） */
+static struct {
+    char *ln[MAXLINES];
+    int   n;                           /* 行数 */
+    int   sc;                          /* 滚动位置 */
+} wbuf[APP_MAX];
+static int wbuf_cur = 0;
+
+#define lines   (wbuf[wbuf_cur].ln)
+#define nlines  (wbuf[wbuf_cur].n)
+#define scroll  (wbuf[wbuf_cur].sc)
+
+static void set_wbuf(int app);         /* 定义在迷你应用状态之后 */
 
 static void free_lines(void)
 {
@@ -467,7 +484,6 @@ static int app_count_visible(void) { return APP_COUNT; }
 /* 活动应用类型：静态窗口内容（lines 驱动）vs 交互驱动型 */
 static int menu_sel = 0;        /* 当前选中的应用 */
 static int open_app = -1;       /* -1 桌面，否则应用编号 */
-static int scroll = 0;          /* 应用内容滚动 */
 static int dirty = 1;           /* 需要整屏重绘 */
 
 static void app_about(void)
@@ -568,27 +584,55 @@ static void app_install(void)
 
 /* ================= 迷你应用集（访达/设置/计算器/日历/时钟/备忘录等） ================= */
 /*
- * 设计：所有迷你应用共享一份 ui_* 状态（同一时刻只开一个应用）。
- *  - 信息型（活动监视器/磁盘工具/控制台/AirPort/通讯录/天气/股市/词典结果/查找结果）
- *    走通用 lines[] 渲染；
+ * 设计：每个应用拥有独立的 ui_* 状态（MiniState 数组 + 宏映射），
+ * 多窗口同时打开互不干扰；调用点仍写 ui_xxx，随 mini_cur 切换。
+ *  - 信息型（活动监视器/磁盘工具/控制台/AirPort 等结果）走通用 lines[] 渲染；
  *  - 交互型（访达/系统设置/计算器/日历/时钟/备忘录/提醒事项/脚本编辑器/截屏）
  *    由 app_draw_custom() 自绘，app_key_custom() 处理按键。
  */
 #define UI_EROWS 12
 #define UI_ECOLS 78
 #define UI_LISTN 96
-static char ui_ed[UI_EROWS][UI_ECOLS + 1];   /* 多行编辑器（备忘录/脚本） */
-static int  ui_en, ui_er, ui_ec;             /* 编辑行数 / 光标行 / 列 */
-static char ui_in[256];                      /* 单行输入框 */
-static int  ui_il;
-static int  ui_sel;                          /* 列表选择 */
-static int  ui_mode;                         /* 0 主视图；1 次视图（Esc 返回） */
-static int  ui_cal_m;                        /* 日历相对当前月的偏移 */
-static char ui_msg[160];                     /* 应用内提示行 */
-static char ui_path[256];                    /* 访达当前目录 */
-static char ui_ls_name[UI_LISTN][64];        /* 访达目录项 */
-static unsigned char ui_ls_dir[UI_LISTN];
-static int  ui_ls_n;
+
+typedef struct {
+    char          ed[UI_EROWS][UI_ECOLS + 1]; /* 多行编辑器（备忘录/脚本） */
+    int           en, er, ec;                 /* 编辑行数 / 光标行 / 列 */
+    char          in[256];                    /* 单行输入框 */
+    int           il;
+    int           sel;                        /* 列表选择 */
+    int           mode;                       /* 0 主视图；1 次视图（Esc 返回） */
+    int           cal_m;                      /* 日历相对当前月的偏移 */
+    char          msg[160];                   /* 应用内提示行 */
+    char          path[256];                  /* 访达当前目录 */
+    char          ls_name[UI_LISTN][64];      /* 访达目录项 */
+    unsigned char ls_dir[UI_LISTN];
+    int           ls_n;
+} MiniState;
+
+static MiniState mini[APP_MAX];
+static MiniState *mini_cur = &mini[0];
+
+#define ui_ed      (mini_cur->ed)
+#define ui_en      (mini_cur->en)
+#define ui_er      (mini_cur->er)
+#define ui_ec      (mini_cur->ec)
+#define ui_in      (mini_cur->in)
+#define ui_il      (mini_cur->il)
+#define ui_sel     (mini_cur->sel)
+#define ui_mode    (mini_cur->mode)
+#define ui_cal_m   (mini_cur->cal_m)
+#define ui_msg     (mini_cur->msg)
+#define ui_path    (mini_cur->path)
+#define ui_ls_name (mini_cur->ls_name)
+#define ui_ls_dir  (mini_cur->ls_dir)
+#define ui_ls_n    (mini_cur->ls_n)
+
+/* 切换当前缓冲（行缓冲 + 迷你应用状态）到指定应用 */
+static void set_wbuf(int app)
+{
+    wbuf_cur = app;
+    if (app >= 0 && app < APP_MAX) mini_cur = &mini[app];
+}
 
 /* 前向声明（迷你应用按键里要回调） */
 static void run_app(int app);
@@ -1377,7 +1421,45 @@ static char  term_scr[TERM_ROWS][TERM_BSZ];
 static int   term_px = 0;       /* 光标 x（内容区像素偏移） */
 static int   term_cy = 0;
 
-static int term_wpx(void) { return W - 180; }   /* 内容区可用宽度 */
+/* ---- 窗口管理全局（定义见下方「窗口管理核心」，此处提前声明供 term_wpx 用） ---- */
+#define BAR_H 28                /* 顶部菜单栏高度（提前定义供 WM 使用） */
+#define WIN_MIN_W 340
+#define WIN_MIN_H 220
+#define TITLE_H   26
+
+typedef struct {
+    int open, mini, max, ws;
+    int x, y, w, h;
+    int rx, ry, rw, rh;
+} Win;
+
+static Win wins[APP_MAX];
+static int  zorder[APP_MAX];
+static int  nz = 0;
+static int  cur_ws = 0;
+static int  focused = -1;
+static int  drag_mode = 0;
+static int  drag_app = -1;
+static int  drag_lx, drag_ly;
+static int  anim_app = -1;
+
+static int pill_ws_x0 = -1, pill_ws_w = 0;
+static int pill_ime_x = -1, pill_ime_w = 0;
+static int pill_lang_x = -1, pill_lang_w = 0;
+static int logo_zone_w = 0;
+
+static void anim_start(int kind);
+static void run_app(int app);
+static void ws_switch(int new_ws);
+
+static int term_wpx(void)
+{
+    /* 多窗口版：内容宽度跟随当前窗口（终端/浏览器/安装向导换行都用它） */
+    if (!mode_mobile && open_app >= 0 && wins[open_app].open &&
+        wins[open_app].w > 280)
+        return wins[open_app].w - 20;
+    return W - 180;
+}
 
 static void term_clear(void)
 {
@@ -1522,6 +1604,8 @@ static void term_key(int k)
     int n = 0;
     if (k == 1)      { memcpy(seq, "\033[A", 3); n = 3; }   /* ↑ */
     else if (k == 2) { memcpy(seq, "\033[B", 3); n = 3; }   /* ↓ */
+    else if (k == 3) { memcpy(seq, "\033[C", 3); n = 3; }   /* → */
+    else if (k == 4) { memcpy(seq, "\033[D", 3); n = 3; }   /* ← */
     else if (k == 13 || k == 10) { seq[0] = '\r'; n = 1; }
     else if (key_raw) { seq[0] = key_raw; n = 1; }
     if (n && term_fd >= 0) write(term_fd, seq, n);
@@ -1882,8 +1966,11 @@ static void br_key(int k)
 
 static void run_app(int app)
 {
+    set_wbuf(app);                  /* 后续 lines/scroll 操作指向本应用缓冲 */
     free_lines();
     scroll = 0;
+    wins[app].open = 1;
+    wins[app].mini = 0;
     switch (app) {
     case APP_ABOUT: app_about(); break;
     case APP_SYS:   app_sys();   break;
@@ -2012,31 +2099,193 @@ static void grid_geom(int *cols, int *chh, int *isz, int *gy0)
     if (*isz < 40) *isz = 40;
 }
 
-static int win_max = 0;         /* workstation 绿灯最大化状态 */
+/* ================= 窗口管理核心（workstation 多窗口） ================= */
+/*
+ * 每个应用一个 Win 记录：常规几何 + 最大化前的还原几何 + 所属工作区。
+ * zorder 保存窗口叠放次序（末位 = 最顶层 = 焦点窗口）。
+ * 拖动/缩放由 mouse_poll 驱动，点击分配由 mouse_click 完成。
+ * Win 类型与 wins/zorder/focused 等全局声明见前文（term_wpx 之前）。
+ */
+
+/* ---- 叠放栈 ---- */
+static void z_remove(int app)
+{
+    int i, k = 0;
+    for (i = 0; i < nz; i++)
+        if (zorder[i] != app) zorder[k++] = zorder[i];
+    nz = k;
+}
+
+static void z_top(int app)
+{
+    z_remove(app);
+    if (nz < APP_MAX) zorder[nz++] = app;
+}
+
+/* 当前工作区最顶层的可见窗口，无则 -1 */
+static int topmost_of_ws(int ws)
+{
+    int i;
+    for (i = nz - 1; i >= 0; i--) {
+        int a = zorder[i];
+        if (!wins[a].mini && wins[a].ws == ws) return a;
+    }
+    return -1;
+}
+
+/* 把 app 置顶并成为焦点 */
+static void focus_window(int app)
+{
+    focused = app;
+    open_app = app;
+    z_top(app);
+    set_wbuf(app);
+    dirty = 1;
+}
+
+/* 打开 / 聚焦 / 还原一个窗口（Dock、启动器、Alt+数字统一入口） */
+static void launch_or_focus(int app)
+{
+    Win *w = &wins[app];
+
+    if (mode_mobile) {                          /* 移动版保持单窗口卡片 */
+        if (anim_kind) return;
+        open_app = app;
+        menu_sel = app;
+        set_wbuf(app);
+        run_app(app);
+        anim_start(1);
+        return;
+    }
+    if (w->open) {
+        if (focused == app && !w->mini) { dirty = 1; return; }
+        w->mini = 0;
+        w->ws = cur_ws;                         /* 从其他工作区拉回 */
+        focus_window(app);
+        anim_start(1);
+        return;
+    }
+    w->w = W - 160;
+    if (w->w < WIN_MIN_W) w->w = WIN_MIN_W;
+    if (w->w > W - 40)    w->w = W - 40;
+    w->h = H - 120;
+    if (w->h < WIN_MIN_H) w->h = WIN_MIN_H;
+    if (w->h > H - 70)    w->h = H - 70;
+    {
+        int cascade = 0, i;
+        for (i = 0; i < APP_MAX; i++) if (wins[i].open) cascade++;
+        w->x = 80 + (cascade % 6) * 22;
+        w->y = 60 + (cascade % 6) * 16;
+        if (w->x + w->w > W - 8)  w->x = W - 8 - w->w;
+        if (w->y + w->h > H - 30) w->y = H - 30 - w->h;
+        if (w->x < 0) w->x = 0;
+        if (w->y < BAR_H + 1) w->y = BAR_H + 1;
+    }
+    w->max = 0;
+    w->mini = 0;
+    w->ws = cur_ws;
+    w->open = 1;
+    menu_sel = app;
+    focus_window(app);
+    run_app(app);
+    anim_start(1);
+}
+
+/* 双击标题栏：最大化 / 还原 */
+static void win_toggle_max(int app)
+{
+    Win *w = &wins[app];
+    if (w->max) {
+        w->max = 0;
+    } else {
+        if (!w->rw) {                           /* 记录还原几何（仅首次） */
+            w->rx = w->x; w->ry = w->y;
+            w->rw = w->w; w->rh = w->h;
+        }
+        w->max = 1;
+    }
+    dirty = 1;
+}
+
+/* ---- 命中测试 ---- */
+static int hit_title(int X, int Y, int wx, int wy, int ww)
+{
+    if (Y < wy || Y >= wy + TITLE_H) return 0;
+    if (X < wx + 66) return 0;                          /* 红绿灯区 */
+    if (X > wx + ww - text_w(L(S_BACK), 1) - 14) return 0;  /* Esc 提示区 */
+    return 1;
+}
+
+/* 1 右下角 2 右缘 3 底缘，0 无 */
+static int hit_resize(int X, int Y, int wx, int wy, int ww, int wh)
+{
+    if (X >= wx + ww - 14 && Y >= wy + wh - 14) return 1;
+    if (X >= wx + ww - 6 && Y >= wy + TITLE_H && Y < wy + wh - 14) return 2;
+    if (Y >= wy + wh - 6 && X >= wx + 66 && X < wx + ww - 14) return 3;
+    return 0;
+}
+
+static int clampi(int v, int lo, int hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* 拖动中：窗口随增量移动（保证标题栏在屏幕内） */
+static void win_apply_drag(int app, int mx, int my)
+{
+    Win *w = &wins[app];
+    w->x += mx - drag_lx;
+    w->y += my - drag_ly;
+    drag_lx = mx; drag_ly = my;
+    if (w->x > W - 60)  w->x = W - 60;                  /* 至少留 60px 可抓 */
+    if (w->x + 60 < 0)  w->x = -60;
+    if (w->y < BAR_H + 1) w->y = BAR_H + 1;
+    if (w->y > H - TITLE_H - 8) w->y = H - TITLE_H - 8;
+    dirty = 1;
+}
+
+/* 缩放中：which 1 角 2 右缘 3 底缘 */
+static void win_apply_resize(int app, int which, int mx, int my)
+{
+    Win *w = &wins[app];
+    if (which != 3) w->w = clampi(mx - w->x, WIN_MIN_W, W - w->x);
+    if (which != 2) w->h = clampi(my - w->y, WIN_MIN_H, H - w->y);
+    drag_lx = mx; drag_ly = my;
+    dirty = 1;
+}
 
 /* 当前窗口矩形（含动画帧的 y 偏移） */
-static void win_rect(int *wx, int *wy, int *ww, int *wh)
+static void win_rect_app(int app, int *wx, int *wy, int *ww, int *wh)
 {
     int y_off = 0;
-    if (anim_kind == 1)      y_off = (ANIM_FRAMES - anim_frame) * 8;
-    else if (anim_kind == 2 || anim_kind == 3) y_off = anim_frame * 10;
+    if (anim_kind && app == anim_app) {
+        if (anim_kind == 1)      y_off = (ANIM_FRAMES - anim_frame) * 8;
+        else if (anim_kind == 2 || anim_kind == 3) y_off = anim_frame * 10;
+    }
 
     if (mode_mobile) {
         *wx = 10; *wy = 34;
         *ww = W - 20; *wh = H - 34 - 18;        /* 底部留手势条区域 */
-    } else if (win_max) {
+    } else if (wins[app].max) {
         *wx = 0; *wy = 28; *ww = W; *wh = H - 28;
     } else {
-        *wx = 80; *wy = 60;
-        *ww = W - 160; *wh = H - 120;
+        *wx = wins[app].x; *wy = wins[app].y;
+        *ww = wins[app].w; *wh = wins[app].h;
     }
     *wy += y_off;
+}
+
+/* 兼容旧调用点：焦点窗口矩形 */
+static void win_rect(int *wx, int *wy, int *ww, int *wh)
+{
+    win_rect_app(focused >= 0 ? focused : 0, wx, wy, ww, wh);
 }
 
 static void anim_start(int kind)
 {
     anim_kind = kind;
     anim_frame = 0;
+    anim_app = focused;                     /* 动画作用于焦点窗口 */
     gettimeofday(&anim_t0, NULL);
     dirty = 1;
 }
@@ -2045,11 +2294,14 @@ static void anim_start(int kind)
 static void anim_finish(void)
 {
     int kind = anim_kind;
+    int app = anim_app;
     anim_kind = 0;
+    anim_app = -1;
+    if (app < 0) return;
     if (kind == 2) {
         /* 关闭：终端等进程一并结束 */
         if (mode_mobile && kbd_visible) kbd_hide();
-        if (open_app == APP_TERM && term_fd >= 0) {
+        if (app == APP_TERM && term_fd >= 0) {
             close(term_fd);
             term_fd = -1;
             if (term_pid > 0) {
@@ -2058,15 +2310,27 @@ static void anim_finish(void)
                 term_pid = -1;
             }
         }
-        open_app = -1;
-        free_lines();
-        scroll = 0;
-        win_max = 0;
+        z_remove(app);
+        wins[app].open = 0;
+        wins[app].mini = 0;
+        wins[app].max = 0;
+        if (focused == app) {
+            focused = open_app = topmost_of_ws(cur_ws);
+            if (focused >= 0) set_wbuf(focused);
+        }
         dirty = 1;
     } else if (kind == 3) {
         /* 最小化（移动版主页 / workstation 黄灯）：终端进程保持运行 */
-        open_app = -1;
-        scroll = 0;
+        if (mode_mobile) {
+            open_app = -1;
+        } else {
+            wins[app].mini = 1;
+            z_remove(app);
+            if (focused == app) {
+                focused = open_app = topmost_of_ws(cur_ws);
+                if (focused >= 0) set_wbuf(focused);
+            }
+        }
         dirty = 1;
     }
 }
@@ -3084,10 +3348,7 @@ static void mouse_click(void)
             int cx = x0 + i * (cw + gap);
             if (mx >= cx && mx <= cx + cw && my >= y0 && my <= y0 + ch) {
                 mt_mode = 0;
-                menu_sel = i;
-                open_app = i;
-                run_app(i);
-                dirty = 1;
+                launch_or_focus(i);
                 return;
             }
         }
@@ -3096,110 +3357,165 @@ static void mouse_click(void)
         return;
     }
 
-    /* ---- 桌面启动器 ---- */
-    if (open_app < 0) {
+    if (mode_mobile) {
+        /* ---- mobile 主屏网格：4 列图标（行高自适应） ---- */
         int i;
         int n = app_count_visible();
-        if (!mode_mobile) {
-            /* workstation Dock：多行自适应图标条 */
-            int cols, rows, dx, dy, barh, isz;
-            dock_geom(&cols, &rows, &dx, &dy, &barh, &isz);
-            for (i = 0; i < n; i++) {
-                int ix, iy;
-                dock_slot(i, &ix, &iy, isz);
-                if (mx >= ix && mx <= ix + isz &&
-                    my >= iy && my <= iy + isz + 12) {
-                    menu_sel = i;
-                    open_app = i;
-                    run_app(i);
-                    anim_start(1);
-                    dirty = 1;
-                    return;
-                }
-            }
-        } else {
-            /* mobile 主屏网格：4 列图标（行高自适应） */
-            int cols, chh, isz, gy0;
-            int cw;
-            grid_geom(&cols, &chh, &isz, &gy0);
-            cw = W / cols;
-            for (i = 0; i < n; i++) {
-                int cx = (i % cols) * cw;
-                int cy = gy0 + (i / cols) * chh;
-                int ix = cx + (cw - isz) / 2;
-                int iy = cy + 6;
-                if (mx >= ix && mx <= ix + isz && my >= iy && my <= iy + isz + 34) {
-                    menu_sel = i;
-                    open_app = i;
-                    run_app(i);
-                    anim_start(1);
-                    dirty = 1;
-                    return;
-                }
+        int cols, chh, isz, gy0;
+        int cw;
+        grid_geom(&cols, &chh, &isz, &gy0);
+        cw = W / cols;
+        for (i = 0; i < n; i++) {
+            int cx = (i % cols) * cw;
+            int cy = gy0 + (i / cols) * chh;
+            int ix = cx + (cw - isz) / 2;
+            int iy = cy + 6;
+            if (mx >= ix && mx <= ix + isz && my >= iy && my <= iy + isz + 34) {
+                menu_sel = i;
+                open_app = i;
+                run_app(i);
+                anim_start(1);
+                dirty = 1;
+                return;
             }
         }
         return;
     }
 
-    /* ---- 应用窗口内 ---- */
-    {
-        int wx, wy, ww, wh;
-        win_rect(&wx, &wy, &ww, &wh);
+    /* ============ workstation：菜单栏 → Dock → 窗口 → 桌面 ============ */
 
-        if (!mode_mobile) {
-            /* macOS 红绿灯：关闭 / 最小化 / 最大化 */
-            int ty = wy + 13;
-            int dx2, dy2;
-            dx2 = mx - (wx + 16); dy2 = my - ty;
-            if (dx2 * dx2 + dy2 * dy2 <= 100) { app_close_anim(); return; }
-            dx2 = mx - (wx + 36); dy2 = my - ty;
-            if (dx2 * dx2 + dy2 * dy2 <= 100) { app_minimize(); return; }
-            dx2 = mx - (wx + 56); dy2 = my - ty;
-            if (dx2 * dx2 + dy2 * dy2 <= 100) { win_max = !win_max; dirty = 1; return; }
+    /* ---- 菜单栏（始终置顶可点） ---- */
+    if (my < BAR_H) {
+        if (logo_zone_w > 0 && mx < logo_zone_w) {
+            /* 点击「e1LibreOS」= 显示桌面（最小化当前工作区全部窗口） */
+            int i;
+            for (i = 0; i < nz; i++)
+                if (!wins[zorder[i]].mini && wins[zorder[i]].ws == cur_ws)
+                    wins[zorder[i]].mini = 1;
+            nz = 0;
+            focused = open_app = -1;
+            dirty = 1;
+            return;
+        }
+        if (pill_ws_x0 >= 0 && mx >= pill_ws_x0 &&
+            mx < pill_ws_x0 + 2 * (pill_ws_w + 4)) {
+            ws_switch(mx < pill_ws_x0 + pill_ws_w + 2 ? 0 : 1);
+            return;
+        }
+        if (pill_ime_x >= 0 && mx >= pill_ime_x && mx < pill_ime_x + pill_ime_w) {
+            ime_toggle();
+            return;
+        }
+        if (pill_lang_x >= 0 && mx >= pill_lang_x && mx < pill_lang_x + pill_lang_w) {
+            lang = !lang;
+            lang_save();
+            if (open_app == APP_ABOUT || open_app == APP_SYS ||
+                open_app == APP_PKG || open_app == APP_INSTALL) {
+                run_app(open_app);
+                scroll = 0;
+            }
+            dirty = 1;
+            return;
+        }
+        return;                          /* 菜单栏其余区域：无动作 */
+    }
+
+    /* ---- Dock（悬浮于窗口之上） ---- */
+    {
+        int cols, rows, dx, dy, barh, isz;
+        dock_geom(&cols, &rows, &dx, &dy, &barh, &isz);
+        if (my >= dy && my <= dy + barh) {
+            int i;
+            for (i = 0; i < APP_COUNT; i++) {
+                int ix, iy;
+                dock_slot(i, &ix, &iy, isz);
+                if (mx >= ix && mx <= ix + isz &&
+                    my >= iy && my <= iy + isz + 12) {
+                    if (wins[i].open && focused == i && !wins[i].mini)
+                        app_minimize();          /* 再点一次 = 最小化 */
+                    else
+                        launch_or_focus(i);
+                    return;
+                }
+            }
+        }
+    }
+
+    /* ---- 窗口（自顶向下命中） ---- */
+    {
+        int zi;
+        for (zi = nz - 1; zi >= 0; zi--) {
+            int a = zorder[zi];
+            int wx, wy, ww, wh;
+            if (wins[a].mini || wins[a].ws != cur_ws) continue;
+            win_rect_app(a, &wx, &wy, &ww, &wh);
+            if (mx < wx || mx >= wx + ww || my < wy || my >= wy + wh) continue;
+
+            if (a != focused) {              /* 首次点击只置顶，不下传 */
+                focus_window(a);
+                return;
+            }
+
+            /* 焦点窗口：红绿灯 */
+            if (!wins[a].max || 1) {
+                int ty = wy + 13, dx2, dy2;
+                dx2 = mx - (wx + 16); dy2 = my - ty;
+                if (dx2 * dx2 + dy2 * dy2 <= 100) { app_close_anim(); return; }
+                dx2 = mx - (wx + 36); dy2 = my - ty;
+                if (dx2 * dx2 + dy2 * dy2 <= 100) { app_minimize(); return; }
+                dx2 = mx - (wx + 56); dy2 = my - ty;
+                if (dx2 * dx2 + dy2 * dy2 <= 100) { win_toggle_max(a); return; }
+            }
+
+            /* Esc 提示 = 关闭 */
+            if (my < wy + TITLE_H &&
+                mx >= wx + ww - text_w(L(S_BACK), 1) - 12 &&
+                mx <= wx + ww - 4) {
+                app_close_anim();
+                return;
+            }
+
+            /* 标题栏：双击最大化/还原（拖动在 mouse_poll） */
+            if (hit_title(mx, my, wx, wy, ww)) {
+                static int last_t = 0, last_x = -99, last_y = -99;
+                struct timeval tv;
+                int now_ms;
+                gettimeofday(&tv, NULL);
+                now_ms = (int)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+                if (now_ms - last_t < 400 &&
+                    abs(mx - last_x) < 10 && abs(my - last_y) < 10) {
+                    last_t = 0;
+                    win_toggle_max(a);
+                } else {
+                    last_t = now_ms;
+                    last_x = mx; last_y = my;
+                }
+                return;
+            }
 
             /* 图形安装向导按钮 */
-            if (open_app == APP_INSTALL &&
-                (setup_page <= 3 || setup_page == 5)) {
+            if (a == APP_INSTALL && (setup_page <= 3 || setup_page == 5)) {
                 int bt = wy + wh - 44;
                 if (setup_hit_button(mx, my, wx + ww - 150, bt, 1)) return;
                 if (setup_page > 0 && setup_hit_button(mx, my, wx + ww - 260, bt, 0))
                     return;
             }
-        }
-
-        /* mobile 模式：点击浏览器地址栏 / 终端窗口内容 → 弹出虚拟键盘 */
-        if (mode_mobile) {
-            if (open_app == APP_BROWSER) {
-                int bar_y = wy + 26 + 6;
-                if (mx >= wx && mx <= wx + ww &&
-                    my >= bar_y - 2 && my <= bar_y + 20) {
-                    kbd_show(1);
-                    return;
-                }
-            } else if (open_app == APP_TERM) {
-                if (mx >= wx && mx <= wx + ww &&
-                    my >= wy + 26 && my <= wy + wh) {
-                    kbd_show(2);
-                    return;
-                }
-            }
+            return;                          /* 窗口内容区：键盘驱动 */
         }
     }
+    /* ---- 桌面空白：无动作 ---- */
 }
 
 static void mouse_back(void)
 {
-    if (open_app >= 0) {
-        open_app = -1;
-        free_lines();
-        scroll = 0;
-        dirty = 1;
-    }
+    /* 右键 = 返回/关闭：与 Esc、红绿灯同一条路径（含数据保存） */
+    if (open_app >= 0) app_close();
 }
 
 static void mouse_wheel(int dir)        /* dir: +1 下翻 / -1 上翻 */
 {
     if (open_app >= 0) {
+        set_wbuf(open_app);
         scroll += dir * 3;
     } else {
         int maxsel = app_count_visible() - 1;
@@ -3214,6 +3530,10 @@ static void mouse_wheel(int dir)        /* dir: +1 下翻 / -1 上翻 */
  * 点击语义 = 按下→松开且位移 <10px（tap）；拖动进入手势流程：
  *   mobile：手势条上滑=主页（>150px 为多任务）、左右缘滑动=返回；
  *   workstation：仅 tap（无系统手势，与 macOS 桌面操作一致）。 */
+/* 红绿灯 / Dock 悬停跟踪（状态变化才重绘，避免每帧整屏刷新） */
+static int tl_hover = -1;        /* -1 无 / 0 关闭 / 1 最小化 / 2 最大化 */
+static int dock_hover = -1;      /* Dock 图标悬停索引 */
+
 static void mouse_poll(void)
 {
     int i;
@@ -3221,6 +3541,7 @@ static void mouse_poll(void)
     int old_mx = mx, old_my = my;
     int ptr_down = gest_ptr_down;   /* 指针按下中（鼠标左键或触摸） */
     static int down_x = 0, down_y = 0;
+    static int press_title = 0, press_resize = 0;
     int release_click = 0;
 
     for (i = 0; i < MAXEV; i++) {
@@ -3258,15 +3579,34 @@ static void mouse_poll(void)
                             else                                 gest_kind = 0;
                             gest_dy = 0; gest_dx = 0;
                         } else {
+                            /* workstation：按下时判定拖动/缩放目标 */
                             gest_kind = 0;
+                            press_title = press_resize = 0;
+                            if (focused >= 0 && wins[focused].open &&
+                                !wins[focused].mini && wins[focused].ws == cur_ws) {
+                                int wx, wy, ww, wh;
+                                win_rect_app(focused, &wx, &wy, &ww, &wh);
+                                press_resize = hit_resize(mx, my, wx, wy, ww, wh);
+                                if (press_resize) {
+                                    drag_mode = 2;
+                                    drag_app = focused;
+                                    drag_lx = mx; drag_ly = my;
+                                } else {
+                                    press_title = hit_title(mx, my, wx, wy, ww);
+                                }
+                            }
                         }
                     } else if (e.value == 0 && ptr_down) {
                         ptr_down = 0;
                         gest_ptr_down = 0;
-                        if (mode_mobile && gesture_finish())
-                            ;                              /* 手势已消费 */
+                        if (drag_mode) {
+                            drag_mode = 0;         /* 拖动/缩放结束 */
+                        } else if (mode_mobile && gesture_finish())
+                            ;                      /* 手势已消费 */
                         else if (abs(mx - down_x) + abs(my - down_y) < 10)
-                            release_click = 1;             /* tap → click */
+                            release_click = 1;     /* tap → click */
+                        press_title = 0;
+                        press_resize = 0;
                     }
                 } else if (e.code == BTN_RIGHT && e.value == 1) {
                     mouse_back();
@@ -3292,6 +3632,69 @@ static void mouse_poll(void)
         if (my < 0) my = 0;
         if (mx > W - CUR_W) mx = W - CUR_W;
         if (my > H - CUR_H) my = H - CUR_H;
+
+        /* ---- workstation：窗口拖动 / 缩放驱动 ---- */
+        if (!mode_mobile && ptr_down) {
+            if (drag_mode == 2) {
+                win_apply_resize(drag_app, press_resize ? press_resize : 1, mx, my);
+            } else if (press_title &&
+                       abs(mx - down_x) + abs(my - down_y) > 4) {
+                /* 移动阈值超过后进入拖动；拖最大化的窗口先还原到光标下 */
+                press_title = 0;
+                drag_mode = 1;
+                drag_app = focused;
+                drag_lx = down_x; drag_ly = down_y;
+                if (wins[drag_app].max) {
+                    Win *w = &wins[drag_app];
+                    w->max = 0;
+                    w->x = mx - w->rw / 2;
+                    w->y = my - 13;
+                    if (w->y < BAR_H + 1) w->y = BAR_H + 1;
+                }
+            } else if (drag_mode == 1) {
+                win_apply_drag(drag_app, mx, my);
+            }
+            if (drag_mode) {
+                /* 拖动中把光标直接画到新帧（主循环随 dirty 整屏重绘） */
+                draw_cursor();
+                return;
+            }
+        }
+
+        /* ---- 悬停状态跟踪（变化才触发重绘） ---- */
+        if (!mode_mobile && !ptr_down) {
+            int nh = -1, nd = -1;
+            if (focused >= 0 && wins[focused].open && !wins[focused].mini &&
+                wins[focused].ws == cur_ws) {
+                int wx, wy, ww, wh, ty;
+                win_rect_app(focused, &wx, &wy, &ww, &wh);
+                ty = wy + 13;
+                if (my >= ty - 8 && my <= ty + 8) {
+                    int d = mx - (wx + 16);
+                    if (d >= -8 && d <= 8) nh = 0;
+                    else if (mx - (wx + 36) >= -8 && mx - (wx + 36) <= 8) nh = 1;
+                    else if (mx - (wx + 56) >= -8 && mx - (wx + 56) <= 8) nh = 2;
+                }
+            }
+            {
+                int cols, rows, dx, dy, barh, isz;
+                dock_geom(&cols, &rows, &dx, &dy, &barh, &isz);
+                if (my >= dy && my <= dy + barh) {
+                    int s;
+                    for (s = 0; s < APP_COUNT; s++) {
+                        int ix, iy;
+                        dock_slot(s, &ix, &iy, isz);
+                        if (mx >= ix && mx <= ix + isz &&
+                            my >= iy && my <= iy + isz + 12) { nd = s; break; }
+                    }
+                }
+            }
+            if (nh != tl_hover || nd != dock_hover) {
+                tl_hover = nh; dock_hover = nd;
+                dirty = 1;
+            }
+        }
+
         if (cursor_on) {
             /* 用旧位置把背景还回去（cursor_save 是旧位置保存的像素），
              * 再在新位置保存背景+画光标 */
@@ -3320,36 +3723,54 @@ static u32 bg_at(int y)
     return c;
 }
 
-#define BAR_H 28
-
-static void draw_desktop(void)
+/* ---- 顶部菜单栏（workstation） / 状态栏（mobile），redraw 最后绘制保证置顶 ---- */
+static void draw_menubar(void)
 {
-    int i, y;
     time_t t = time(NULL);
     struct tm *tm = localtime(&t);
     char clockbuf[32];
 
-    /* 垂直渐变背景 */
-    for (y = 0; y < H; y++) {
-        u32 c = bg_at(y);
-        for (i = 0; i < W; i++)
-            fbp[y * W + i] = c;
-    }
-
-    snprintf(clockbuf, sizeof clockbuf, "%02d:%02d",
-             tm->tm_hour, tm->tm_min);
+    snprintf(clockbuf, sizeof clockbuf, "%02d:%02d", tm->tm_hour, tm->tm_min);
 
     if (!mode_mobile) {
-        /* ============ workstation：macOS 风格菜单栏 ============ */
+        int x;
         fill(0, 0, W, BAR_H, C_MENU);
+        fill(0, BAR_H - 1, W, 1, 0x000000);          /* 底部 1px 分隔线 */
+        logo_zone_w = text_w(" e1LibreOS", SCALE_TXT) + 24;
         text(10, 10, " e1LibreOS", C_FG, SCALE_TXT);
         if (open_app >= 0)
-            text(150, 10, L(S_APP_FINDER + open_app), C_FG, SCALE_TXT);
+            text(logo_zone_w + 30, 10, L(S_APP_FINDER + open_app), C_FG, SCALE_TXT);
         else
-            text(150, 10, L(S_MENU_HINT), C_DIM, SCALE_TXT);
-        text(W - text_w(clockbuf, 2) - text_w(L(S_LANG_SW), 1) - 24, 10,
-             L(S_LANG_SW), C_DIM, 1);
+            text(logo_zone_w + 30, 10, L(S_MENU_HINT), C_DIM, SCALE_TXT);
+        /* 时钟（最右） */
         text(W - text_w(clockbuf, 2) - 12, 8, clockbuf, C_FG, 2);
+        x = W - text_w(clockbuf, 2) - 12 - 6;
+        /* 语言 pill（中/EN） */
+        pill_lang_w = 40;
+        x -= pill_lang_w;
+        pill_lang_x = x;
+        fill_round(x, 4, pill_lang_w, 20, 10, C_TITLE);
+        text(x + 10, 10, lang ? "EN" : "中", C_FG, 1);
+        /* IME pill（拼/EN） */
+        pill_ime_w = 40;
+        x -= 6 + pill_ime_w;
+        pill_ime_x = x;
+        fill_round(x, 4, pill_ime_w, 20, 10, ime_active ? C_SEL : C_TITLE);
+        text(x + 10, 10, ime_active ? "拼" : "EN", C_FG, 1);
+        /* 工作区 pills（1/2） */
+        pill_ws_w = 24;
+        x -= 6 + 2 * (pill_ws_w + 4);
+        pill_ws_x0 = x;
+        {
+            int p;
+            for (p = 0; p < 2; p++) {
+                char b[4];
+                fill_round(x + p * (pill_ws_w + 4), 4, pill_ws_w, 20, 10,
+                           cur_ws == p ? C_SEL : C_TITLE);
+                snprintf(b, sizeof b, "%d", p + 1);
+                text(x + p * (pill_ws_w + 4) + 9, 10, b, C_FG, 1);
+            }
+        }
     } else {
         /* ============ mobile：HarmonyOS 风格状态栏 ============ */
         fill(0, 0, W, BAR_H, C_HM_CARD);
@@ -3364,39 +3785,53 @@ static void draw_desktop(void)
             text(W - text_w(sub, 1) - 12, 10, sub, C_HM_ACCENT, 1);
         }
     }
+}
 
-    if (open_app >= 0) return;                  /* 应用窗口下不画启动器 */
+/* ---- Dock（workstation）：悬浮层，redraw 在窗口之后绘制 ---- */
+static void draw_dock(void)
+{
+    int i;
+    int n = APP_COUNT;
+    int cols, rows, dx, dy, barh, isz;
+
+    dock_geom(&cols, &rows, &dx, &dy, &barh, &isz);
+    fill_round(dx, dy, W - 2 * dx, barh, 12, C_MENU);
+    for (i = 0; i < n; i++) {
+        int ix, iy;
+        int hovered = (dock_hover == i);
+        dock_slot(i, &ix, &iy, isz);
+        if (hovered)
+            fill_round(ix - 3, iy - 3, isz + 6, isz + 6, 10, C_SEL);
+        else if (open_app < 0 && menu_sel == i)
+            fill_round(ix - 3, iy - 3, isz + 6, isz + 6, 10, 0x2a3a5c);
+        draw_app_icon(ix, iy, isz, i, 0xffffff);
+        if (wins[i].open)                            /* 运行中（含最小化） */
+            draw_dot(ix + isz / 2, iy + isz + 6, 2, C_FG);
+        if (hovered)
+            text(ix + isz / 2 - text_w(L(S_APP_FINDER + i), 1) / 2,
+                 iy - 14, L(S_APP_FINDER + i), C_FG, 1);
+    }
+}
+
+static void draw_desktop(void)
+{
+    int i, y;
+
+    /* 垂直渐变背景 */
+    for (y = 0; y < H; y++) {
+        u32 c = bg_at(y);
+        for (i = 0; i < W; i++)
+            fbp[y * W + i] = c;
+    }
 
     if (!mode_mobile) {
-        /* ---- workstation 桌面：中央品牌 + Dock ---- */
-        text(W / 2 - text_w("e1LibreOS", 5) / 2, H / 3, "e1LibreOS", C_FG, 5);
-        text(W / 2 - text_w(variant_str, 2) / 2, H / 3 + 88, variant_str, C_ACCENT, 2);
-
-        /* Dock：底部居中圆角条（多行自适应）+ 图标 + 运行指示点 */
-        {
-            int n = APP_COUNT;
-            int cols, rows, dx, dy, barh, isz;
-            dock_geom(&cols, &rows, &dx, &dy, &barh, &isz);
-            fill_round(dx, dy, W - 2 * dx, barh, 12, C_MENU);
-            for (i = 0; i < n; i++) {
-                int ix, iy;
-                int hovered;
-                dock_slot(i, &ix, &iy, isz);
-                hovered = (mx >= ix && mx <= ix + isz &&
-                          my >= iy && my <= iy + isz + 12);
-                if (hovered)
-                    fill_round(ix - 3, iy - 3, isz + 6, isz + 6, 10, C_SEL);
-                draw_app_icon(ix, iy, isz, i, 0xffffff);
-                /* 运行指示：终端常驻或当前打开的应用 */
-                if ((i == APP_TERM && term_fd >= 0) || open_app == i)
-                    draw_dot(ix + isz / 2, iy + isz + 6, 2, C_FG);
-                /* 图标名 hover 提示 */
-                if (hovered)
-                    text(ix + isz / 2 - text_w(L(S_APP_FINDER + i), 1) / 2,
-                         iy - 14, L(S_APP_FINDER + i), C_FG, 1);
-            }
+        /* ---- workstation 桌面：无窗口时显示品牌与提示 ---- */
+        if (topmost_of_ws(cur_ws) < 0) {
+            text(W / 2 - text_w("e1LibreOS", 5) / 2, H / 3, "e1LibreOS", C_FG, 5);
+            text(W / 2 - text_w(variant_str, 2) / 2, H / 3 + 88,
+                 variant_str, C_ACCENT, 2);
+            text(10, H / 3 + 124, L(S_BOTTOM_HINT), C_DIM, 1);
         }
-        text(10, H / 3 + 124, L(S_BOTTOM_HINT), C_DIM, 1);
     } else if (mt_mode) {
         /* ---- mobile 多任务卡片视图 ---- */
         {
@@ -3450,41 +3885,99 @@ static void draw_desktop(void)
     }
 }
 
-static void draw_window(void)
+/* 内容溢出时在右缘画细滚动条（轨道 + 滑块） */
+static void draw_scrollbar(int wx, int ww, int top, int bottom, int total, int isf)
+{
+    int line_h = 16 * SCALE_TXT;
+    int vis = (bottom - top) / line_h;
+    int maxs, th, ty;
+    if (vis <= 0 || total <= vis) return;
+    maxs = total - vis;
+    fill(wx + ww - 7, top, 4, bottom - top, 0x1c2436);
+    th = (bottom - top) * vis / total;
+    if (th < 12) th = 12;
+    ty = top + (bottom - top - th) * scroll / (maxs > 0 ? maxs : 1);
+    if (ty < top) ty = top;
+    fill_round(wx + ww - 7, ty, 4, th, 2, isf ? 0x44598c : 0x2c3654);
+}
+
+/* 绘制一个窗口（app 可为非焦点窗口；行缓冲随 set_wbuf 切到本应用） */
+static void draw_window_app(int app)
 {
     const char *title;
     int wx, wy, ww, wh, content_h, i, y;
     int line_h = 16 * SCALE_TXT;           /* 行高随字号 */
     int bottom;                            /* 内容渲染下边界（键盘可见时上移） */
+    int isf;
 
-    if (open_app < 0 || open_app >= APP_COUNT) return;
-    title = L(S_APP_FINDER + open_app);
+    if (app < 0 || app >= APP_COUNT) return;
+    if (wins[app].mini || wins[app].ws != cur_ws) return;
+    isf = (app == focused);
+    title = L(S_APP_FINDER + app);
 
-    win_rect(&wx, &wy, &ww, &wh);   /* mobile 全屏卡片 / workstation 窗口 / 动画位移 */
+    win_rect_app(app, &wx, &wy, &ww, &wh);
     /* mobile 模式下键盘可见时，窗口内容渲染到键盘上方为止 */
     bottom = wy + wh - 8;
     if (mode_mobile && kbd_visible) {
         int kt = kbd_top();
         if (kt - 8 < bottom) bottom = kt - 8;
     }
-    fill(wx, wy, ww, wh, C_WIN);
-    fill(wx, wy, ww, 26, C_TITLE);
-    fill(wx, wy + wh - 2, ww, 2, C_ACCENT);
+
     if (!mode_mobile) {
-        /* macOS 红绿灯：关闭 / 最小化 / 最大化（标题文字右移避让） */
-        int ty = wy + 13;
-        disc(wx + 16, ty, 6, C_TL_CLOSE);
-        disc(wx + 36, ty, 6, C_TL_MIN);
-        disc(wx + 56, ty, 6, C_TL_MAX);
-        text(wx + 78, wy + 9, title, C_FG, SCALE_TXT);
+        /* 阴影：右、下两条 3px 深色带（先画，被窗体覆盖内缘） */
+        fill(wx + 3, wy + wh, ww, 3, 0x040a16);
+        fill(wx + ww, wy + 3, 3, wh - 2, 0x040a16);
+        /* 圆角窗体 */
+        fill_round(wx, wy, ww, wh, 8, C_WIN);
+        /* 1px 边框：焦点高亮，非焦点弱化 */
+        {
+            u32 bc = isf ? C_ACCENT : 0x232c42;
+            fill(wx, wy, ww, 1, bc);
+            fill(wx, wy + wh - 1, ww, 1, bc);
+            fill(wx, wy, 1, wh, bc);
+            fill(wx + ww - 1, wy, 1, wh, bc);
+        }
+        /* 标题栏：顶部圆角 + 下部补齐 + 1px 分隔线 */
+        fill_round(wx + 1, wy + 1, ww - 2, TITLE_H - 1, 8,
+                   isf ? C_TITLE : 0x12161f);
+        fill(wx + 1, wy + 9, ww - 2, TITLE_H - 9, isf ? C_TITLE : 0x12161f);
+        fill(wx + 1, wy + TITLE_H, ww - 2, 1, 0x232c42);
+        {
+            /* macOS 红绿灯：焦点彩色 + 悬停符号；非焦点灰色 */
+            int ty = wy + 13;
+            int hov = isf ? tl_hover : -1;
+            if (hov == 0) disc(wx + 16, ty, 8, 0x3a2430);
+            if (hov == 1) disc(wx + 36, ty, 8, 0x33301a);
+            if (hov == 2) disc(wx + 56, ty, 8, 0x1a3028);
+            disc(wx + 16, ty, 6, isf ? C_TL_CLOSE : 0x4a5058);
+            disc(wx + 36, ty, 6, isf ? C_TL_MIN   : 0x4a5058);
+            disc(wx + 56, ty, 6, isf ? C_TL_MAX   : 0x4a5058);
+            if (hov >= 0) {
+                /* 符号：× − +（悬停时显示） */
+                int cx = wx + (hov == 0 ? 16 : hov == 1 ? 36 : 56);
+                int d;
+                for (d = -2; d <= 2; d++) {
+                    if (hov == 0) { px(cx + d, ty + d, 0x2a1015); px(cx + d, ty - d, 0x2a1015); }
+                    if (hov == 1) px(cx + d, ty, 0x2a2410);
+                    if (hov == 2) { px(cx + d, ty, 0x0f2418); px(cx, ty + d, 0x0f2418); }
+                }
+            }
+            /* 标题居中 */
+            text(wx + ww / 2 - text_w(title, SCALE_TXT) / 2, wy + 9,
+                 title, isf ? C_FG : C_DIM, SCALE_TXT);
+        }
     } else {
+        fill(wx, wy, ww, wh, C_WIN);
+        fill(wx, wy, ww, 26, C_TITLE);
+        fill(wx, wy + wh - 2, ww, 2, C_ACCENT);
         text(wx + 8, wy + 9, title, C_FG, SCALE_TXT);
     }
     text(wx + ww - text_w(L(S_BACK), 1) - 8, wy + 9, L(S_BACK), C_DIM, 1);
 
     content_h = bottom - (wy + 26 + 6);
+    set_wbuf(app);                          /* 行缓冲/滚动位置切到本应用 */
 
-    if (open_app == APP_TERM) {
+    if (app == APP_TERM) {
         /* 终端：直接渲染 term_scr 行 */
         y = wy + 26 + 6;
         for (i = 0; i < TERM_ROWS; i++, y += line_h) {
@@ -3494,14 +3987,16 @@ static void draw_window(void)
         }
         /* 底部提示 */
         text(wx + 8, wy + wh - 16, L(S_TERM_HINT), C_DIM, 1);
-    } else if (open_app == APP_BROWSER) {
+    } else if (app == APP_BROWSER) {
         /* 浏览器：地址栏 + 页面内容 */
         int bar_y = wy + 26 + 6;
         char bar[200];
+        int page_top;
         fill(wx + 6, bar_y - 2, ww - 12, 16 * SCALE_TXT + 4, C_TITLE);
         snprintf(bar, sizeof bar, "> %s_", br_input);
         text(wx + 10, bar_y, bar, C_ACCENT, SCALE_TXT);
         y = bar_y + 16 * SCALE_TXT + 8;
+        page_top = y;
         {
             int vis = (bottom - y) / line_h;
             int max_scroll = nlines > vis ? nlines - vis : 0;
@@ -3512,12 +4007,13 @@ static void draw_window(void)
             if (y + line_h - 2 > bottom) break;
             text(wx + 10, y, lines[i], C_FG, SCALE_TXT);
         }
+        draw_scrollbar(wx, ww, page_top, bottom, nlines, isf);
         if (nlines > (content_h - 16 * SCALE_TXT) / line_h) {
             char s[32];
             snprintf(s, sizeof s, "%d/%d", scroll + 1, nlines);
-            text(wx + ww - text_w(s, 1) - 8, wy + wh - 16, s, C_DIM, 1);
+            text(wx + ww - text_w(s, 1) - 14, wy + wh - 16, s, C_DIM, 1);
         }
-    } else if (open_app == APP_INSTALL && !mode_mobile) {
+    } else if (app == APP_INSTALL && !mode_mobile) {
         draw_setup(wx, wy, ww, wh, bottom);     /* 图形安装向导 */
     } else if (!app_draw_custom(wx, wy, ww, bottom)) {
         /* 静态窗口：lines 驱动 */
@@ -3532,19 +4028,40 @@ static void draw_window(void)
             if (y + line_h - 2 > bottom) break;
             text(wx + 10, y, lines[i], C_FG, SCALE_TXT);
         }
+        draw_scrollbar(wx, ww, wy + 26 + 6, bottom, nlines, isf);
         if (nlines > content_h / line_h) {
             char s[32];
             snprintf(s, sizeof s, "+/- %d/%d", scroll + 1, nlines);
-            text(wx + ww - text_w(s, 1) - 8, wy + wh - 16, s, C_DIM, 1);
+            text(wx + ww - text_w(s, 1) - 14, wy + wh - 16, s, C_DIM, 1);
         }
     }
 }
 
 static void redraw(void)
 {
+    int i;
     draw_desktop();
-    if (open_app >= 0) draw_window();
+
+    /* workstation：窗口自底向上（zorder 末尾 = 最顶层 = 焦点） */
+    if (!mode_mobile) {
+        for (i = 0; i < nz; i++) {
+            int a = zorder[i];
+            if (wins[a].mini || wins[a].ws != cur_ws) continue;
+            draw_window_app(a);
+        }
+        /* Dock 悬浮于窗口之上 */
+        if (nz > 0 || topmost_of_ws(cur_ws) >= 0)
+            draw_dock();
+    } else {
+        /* mobile：单窗口或主屏 */
+        if (open_app >= 0 && wins[open_app].open)
+            draw_window_app(open_app);
+    }
+
+    draw_menubar();
+
     if (mode_mobile && kbd_visible) kbd_draw();
+
     /* IME 候选栏（workstation 始终显示；mobile 仅在虚拟键盘未显示时显示在屏幕底部） */
     if (ime_active && (!mode_mobile || !kbd_visible)) {
         int cy = H - 36;
@@ -3648,6 +4165,8 @@ static int getkey(void)
             read(0, &e2, 1);
             if (e2 == 'A') return 1;            /* ↑ */
             if (e2 == 'B') return 2;            /* ↓ */
+            if (e2 == 'C') return 3;            /* → */
+            if (e2 == 'D') return 4;            /* ← */
             return 27;
         }
         /* ESC+字母 = Alt+字母：标记修饰，返回字母供 handle_key 分发快捷键 */
@@ -3655,17 +4174,17 @@ static int getkey(void)
         key_raw = e1;
         return e1;
     }
-    if (c == 'k' || c == 'j') {                 /* 应用内也收 'j'/'k'：key_raw 保留 */
-        key_raw = c;
-        return c == 'k' ? 1 : 2;
-    }
+    /* j/k 不再劫持为方向键（终端/浏览器可正常输入）；
+     * 桌面/静态窗口中的上下滚动由 handle_key 的 case 'j'/'k' 驱动 */
     key_raw = c;
     return c;
 }
 
-/* 关闭当前应用（终端需杀掉 shell 子进程并关闭 pty） */
+/* 关闭当前应用（终端需杀掉 shell 子进程并关闭 pty；备忘录先保存再关） */
 static void app_close(void)
 {
+    int app = open_app;
+
     if (mode_mobile && kbd_visible) kbd_hide();
     if (setup_pid > 0) {                       /* 关向导窗口 = 取消安装 */
         kill(setup_pid, SIGKILL);
@@ -3673,7 +4192,8 @@ static void app_close(void)
         setup_pid = -1;
     }
     if (setup_fd >= 0) { close(setup_fd); setup_fd = -1; }
-    if (open_app == APP_TERM && term_fd >= 0) {
+    if (app == APP_NOTES || app == APP_SCRIPT) notes_save();  /* 有备忘录先保存 */
+    if (app == APP_TERM && term_fd >= 0) {
         close(term_fd);
         term_fd = -1;
         if (term_pid > 0) {
@@ -3682,14 +4202,34 @@ static void app_close(void)
             term_pid = -1;
         }
     }
-    open_app = -1;
-    free_lines();
+    free_lines();                               /* 缓冲隔离：仅释放当前 app 的 lines[] */
     scroll = 0;
+    if (app >= 0 && app < APP_MAX) {
+        wins[app].open = 0;
+        wins[app].mini = 0;
+        wins[app].max = 0;
+        z_remove(app);
+    }
+    focused = open_app = topmost_of_ws(cur_ws);
+    if (focused >= 0) set_wbuf(focused);
+    dirty = 1;
+}
+
+/* 工作区切换（菜单栏 pill 点击 / Alt+, Alt+.） */
+static void ws_switch(int new_ws)
+{
+    if (new_ws < 0 || new_ws > 1) return;
+    if (new_ws == cur_ws) return;
+    cur_ws = new_ws;
+    focused = open_app = topmost_of_ws(cur_ws);
+    if (focused >= 0) set_wbuf(focused);
     dirty = 1;
 }
 
 static void handle_key(int k)
 {
+    if (!mode_mobile && open_app >= 0 && wins[open_app].open) set_wbuf(open_app);
+
     /* Alt+* 全局快捷键（与当前应用无关，最高优先级）。
      * 原 L 切换语言已迁至 Alt+L，避免与终端/浏览器输入冲突。
      * 注意：Alt+F1/F2 等由内核 VT 切换截获，不会到 e1wm。 */
@@ -3713,6 +4253,13 @@ static void handle_key(int k)
         case 'q': case 'Q':                   /* Alt+Q 退出当前应用 */
             if (open_app >= 0) app_close();
             return;
+        case 'w': case 'W':                   /* Alt+W 最小化当前窗口 */
+            if (open_app >= 0 && wins[open_app].open) app_minimize();
+            return;
+        case ',':                             /* Alt+, → 工作区 1 */
+            ws_switch(0); return;
+        case '.':                             /* Alt+. → 工作区 2 */
+            ws_switch(1); return;
         case 'i': case 'I':                   /* Alt+I 安装到磁盘（mobile） */
             if (open_app != APP_INSTALL) {
                 open_app = APP_INSTALL;
@@ -3723,15 +4270,28 @@ static void handle_key(int k)
         case 'm': case 'M':                   /* Alt+M 切换拼音输入法 */
             ime_toggle();
             return;
-        default:
-            if (k >= '1' && k <= '9') {        /* Alt+1..N 直接打开应用 */
-                int n = k - '1';
-                if (n < APP_COUNT) {
-                    menu_sel = n;
-                    open_app = n;
-                    run_app(n);
-                    dirty = 1;
+        case '\t': {                          /* Alt+Tab → 焦点循环（当前工作区） */
+            int cur = focused, i;
+            if (nz == 0) return;
+            i = nz - 1;
+            if (zorder[i] != cur) {
+                z_remove(cur);               /* 当前焦点移到栈底 */
+                zorder[0] = cur;
+            }
+            /* 跳过 mini 窗口 */
+            for (i = nz - 1; i >= 0; i--) {
+                int a = zorder[i];
+                if (!wins[a].mini && wins[a].ws == cur_ws) {
+                    focus_window(a);
+                    return;
                 }
+            }
+            return;
+        }
+        default:
+            if (k >= '1' && k <= '9') {        /* Alt+1..N 直接打开/聚焦应用 */
+                int n = k - '1';
+                if (n < APP_COUNT) launch_or_focus(n);
                 return;
             }
             return;
@@ -3743,12 +4303,10 @@ static void handle_key(int k)
     }
     if (open_app < 0) {                         /* 桌面 */
         switch (k) {
-        case 1: if (menu_sel > 0) menu_sel--; dirty = 1; break;
-        case 2: if (menu_sel < app_count_visible() - 1) menu_sel++; dirty = 1; break;
+        case 1: case 'k': if (menu_sel > 0) menu_sel--; dirty = 1; break;
+        case 2: case 'j': if (menu_sel < app_count_visible() - 1) menu_sel++; dirty = 1; break;
         case '\r': case '\n':
-            open_app = menu_sel;
-            run_app(open_app);
-            dirty = 1;
+            launch_or_focus(menu_sel);
             break;
         default:                                 /* 桌面无退出（init respawn） */
             break;
@@ -3777,8 +4335,8 @@ static void handle_key(int k)
         app_key_custom(k);
     } else {                                    /* 静态窗口 */
         switch (k) {
-        case 1: scroll--; dirty = 1; break;
-        case 2: scroll++; dirty = 1; break;
+        case 1: case 'k': scroll--; dirty = 1; break;
+        case 2: case 'j': scroll++; dirty = 1; break;
         case 27: case 'q':
             app_close();
             break;
@@ -3869,6 +4427,21 @@ int main(void)
     }
 
     mx = W / 2; my = H / 2;
+
+    /* === WM 全局初始化 === */
+    {
+        int i, j;
+        for (i = 0; i < APP_MAX; i++) {
+            wins[i].open = 0; wins[i].mini = 0; wins[i].max = 0;
+            wins[i].ws = 0; wins[i].x = 0; wins[i].y = 0;
+            wins[i].w = 0; wins[i].h = 0; wins[i].rx = 0; wins[i].ry = 0;
+            wins[i].rw = 0; wins[i].rh = 0;
+        }
+        nz = 0; cur_ws = 0; focused = -1; open_app = -1;
+        drag_mode = 0; drag_app = -1; anim_app = -1;
+        for (j = 0; j < APP_MAX; j++) zorder[j] = 0;
+    }
+    set_wbuf(0);
 
     for (;;) {
         fd_set fds;
