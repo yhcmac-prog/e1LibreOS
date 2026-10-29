@@ -1190,25 +1190,50 @@ static int app_draw_custom(int wx, int wy, int ww, int bottom)
 
     switch (app) {
     case APP_FINDER: {
-        int i;
-        char head[300];
+        int i, dir_c = 0, file_c = 0;
+        char head[300], stats[160];
+        int hdr_y, list_y, list_bot, list_h;
+        hdr_y = y;
         if (ui_mode == 1) { draw_lines_region(wx, y, bottom); return 1; }
-        snprintf(head, sizeof head, "%s  [%s]", lang ? "Finder" : "访达", ui_path);
-        text(wx + 10, y, head, C_ACCENT, SCALE_TXT);
+        /* 统计目录/文件数 */
+        for (i = 0; i < ui_ls_n; i++)
+            if (ui_ls_dir[i]) dir_c++; else file_c++;
+        snprintf(head, sizeof head, "%s  [%s]", lang ? "访达 Finder" : "Finder 访达", ui_path);
+        text(wx + 10, hdr_y, head, C_ACCENT, SCALE_TXT);
+        snprintf(stats, sizeof stats, lang ? "%d 项 · %d 目录 · %d 文件"
+                                            : "%d items · %d dirs · %d files",
+                 ui_ls_n, dir_c, file_c);
+        text(wx + ww - 10 - text_w(stats, SCALE_TXT), hdr_y, stats, C_DIM, SCALE_TXT);
         y += line_h + 4;
-        fill(wx + 8, y, ww - 16, 1, C_DIM);
+        /* 分隔线 */
+        fill(wx + 8, y, ww - 16, 1, 0x2a3a5c);
         y += 6;
+        /* 列表区 */
+        list_y = y; list_bot = bottom - 16; list_h = list_bot - list_y;
         for (i = 0; i < ui_ls_n; i++, y += line_h) {
-            if (y + line_h - 2 > bottom - 14) break;
-            if (i == ui_sel) fill(wx + 6, y - 1, ww - 12, line_h, C_SEL);
-            text(wx + 14, y, ui_ls_dir[i] ? "[]" : "  ", C_DIM, SCALE_TXT);
-            text(wx + 34, y, ui_ls_name[i],
-                 ui_ls_dir[i] ? C_ACCENT : C_FG, SCALE_TXT);
-            if (ui_ls_dir[i]) text(wx + 34, y, ui_ls_name[i], C_ACCENT, SCALE_TXT);
+            if (y + line_h - 2 > list_bot) break;
+            if (i == ui_sel) {
+                fill(wx + 6, y - 1, ww - 12, line_h, C_SEL);
+                fill(wx + 6, y - 1, 3, line_h, C_ACCENT);  /* 左侧高亮竖线 */
+                text(wx + 14, y, "▶", C_ACCENT, SCALE_TXT);
+            } else {
+                text(wx + 14, y, " ", C_FG, SCALE_TXT);
+            }
+            if (ui_ls_dir[i]) {
+                char nm[72];
+                snprintf(nm, sizeof nm, "%s/", ui_ls_name[i]);
+                text(wx + 34, y, "📁", C_ACCENT, SCALE_TXT);
+                text(wx + 34 + text_w("📁", SCALE_TXT) + 4, y, nm, C_ACCENT, SCALE_TXT);
+            } else {
+                text(wx + 34, y, "📄", C_DIM, SCALE_TXT);
+                text(wx + 34 + text_w("📄", SCALE_TXT) + 4, y, ui_ls_name[i], C_FG, SCALE_TXT);
+            }
         }
-        text(wx + 8, bottom - 14,
-             lang ? "Enter open  u/Backspace=up  Esc close"
-                  : "回车打开  u/退格=上级  Esc 关闭", C_DIM, 1);
+        /* 状态栏 */
+        fill(wx + 8, bottom - 12, ww - 16, 1, C_DIM);
+        text(wx + 10, bottom - 11, ui_msg[0] ? ui_msg :
+             (lang ? "Enter 打开 · u/退格 返回上级 · Esc 关闭 · r 刷新"
+                   : "Enter open · u/Backspace up · Esc close · r refresh"), C_DIM, 1);
         return 1;
     }
     case APP_SETTINGS: {
@@ -1216,58 +1241,74 @@ static int app_draw_custom(int wx, int wy, int ww, int bottom)
             {"语言与输入法", "键盘布局", "网络信息", "关于本机"};
         static const char *names_en[4] =
             {"Language & Input", "Keyboard Layout", "Network", "About This PC"};
+        static const char *icons[4] = {"🌐", "⌨️", "📶", "💻"};
         int i;
         if (ui_mode == 1) {
-            /* 面板内容 */
             if (ui_sel == 0) {
-                text(wx + 10, y, lang ? "[l] zh   [e] en"
-                                      : "[l] 中文  [e] English",
+                fill_round(wx + 10, y - 2, ww - 20, line_h + 2, 4, C_TITLE);
+                text(wx + 18, y, lang ? "[l] 中文   [e] English"
+                                      : "[l] zh   [e] en",
                      C_FG, SCALE_TXT);
-                y += line_h + 4;
-                text(wx + 10, y,
-                     lang ? "Current: English" : "当前：中文", C_ACCENT, SCALE_TXT);
-                y += line_h + 4;
-                text(wx + 10, y,
-                     lang ? "Alt+L also switches language"
-                          : "Alt+L 也可随时切换语言", C_DIM, SCALE_TXT);
+                y += line_h + 6;
+                text(wx + 18, y,
+                     lang ? "当前：中文" : "Current: English", C_ACCENT, SCALE_TXT);
+                y += line_h + 6;
+                text(wx + 18, y,
+                     lang ? "随时按 Alt+L 切换语言"
+                          : "Alt+L also switches", C_DIM, SCALE_TXT);
             } else if (ui_sel == 1) {
-                text(wx + 10, y, lang ? "[k] toggle QWERTY/Dvorak"
-                                      : "[k] 切换 QWERTY/德沃夏克",
+                fill_round(wx + 10, y - 2, ww - 20, line_h + 2, 4, C_TITLE);
+                text(wx + 18, y, lang ? "[k] 切换 QWERTY / 德沃夏克"
+                                      : "[k] toggle QWERTY / Dvorak",
                      C_FG, SCALE_TXT);
-                y += line_h + 4;
-                text(wx + 10, y + line_h,
-                     kbd_layout ? "Current: Dvorak" : "Current: QWERTY",
+                y += line_h + 6;
+                text(wx + 18, y + line_h,
+                     kbd_layout ? (lang ? "当前：德沃夏克" : "Current: Dvorak")
+                                : (lang ? "当前：QWERTY" : "Current: QWERTY"),
                      C_ACCENT, SCALE_TXT);
-            } else if (ui_sel == 2) {
-                draw_lines_region(wx, y, bottom);
             } else {
                 draw_lines_region(wx, y, bottom);
             }
             return 1;
         }
-        text(wx + 10, y, lang ? "System Settings" : "系统设置", C_ACCENT, SCALE_TXT);
+        text(wx + 10, y, lang ? "系统设置  — System Settings" : "System Settings  — 系统设置",
+             C_ACCENT, SCALE_TXT);
         y += line_h + 8;
+        fill(wx + 8, y, ww - 16, 1, 0x2a3a5c); y += 8;
         for (i = 0; i < 4; i++, y += line_h + 6) {
-            if (i == ui_sel) fill(wx + 8, y - 2, ww - 16, line_h + 2, C_SEL);
-            text(wx + 18, y, lang ? names_en[i] : names_zh[i], C_FG, SCALE_TXT);
+            if (i == ui_sel) {
+                fill(wx + 8, y - 2, ww - 16, line_h + 2, C_SEL);
+                text(wx + 10, y, "▶", C_ACCENT, SCALE_TXT);
+            }
+            text(wx + 22, y, icons[i], C_ACCENT, SCALE_TXT);
+            text(wx + 22 + text_w(icons[i], SCALE_TXT) + 10, y,
+                 lang ? names_en[i] : names_zh[i], C_FG, SCALE_TXT);
         }
-        text(wx + 10, bottom - 12,
-             lang ? "Enter open  Esc back/close  l/e lang  k layout"
-                  : "回车打开  Esc 返回/关闭  l/e 语言  k 布局", C_DIM, 1);
+        fill(wx + 8, bottom - 12, ww - 16, 1, C_DIM);
+        text(wx + 10, bottom - 11,
+             lang ? "Enter 打开 · Esc 返回/关闭 · l/e 语言 · k 布局"
+                  : "Enter open · Esc back/close · l/e lang · k layout", C_DIM, 1);
         return 1;
     }
     case APP_CALC: {
         if (ui_mode == 1) { draw_lines_region(wx, y, bottom); return 1; }
-        text(wx + 10, y, lang ? "Calculator" : "计算器", C_DIM, SCALE_TXT);
-        draw_input_box(wx + 10, y + line_h + 2, ww - 20, "=");
-        /* 历史记录：lines[1..] 之后的算式 */
-        y += line_h * 2 + 14;
+        text(wx + 10, y, lang ? "计算器  Calculator" : "Calculator  计算器", C_DIM, SCALE_TXT);
+        /* 输入框：带边框 */
+        fill_round(wx + 10, y + line_h + 2, ww - 20, line_h + 10, 4, C_TITLE);
+        fill(wx + 12, y + line_h + 4, ww - 24, 1, 0x2a3a5c);
+        fill(wx + 12, y + line_h + line_h + 8, ww - 24, 1, 0x2a3a5c);
+        draw_input_box(wx + 16, y + line_h + 6, ww - 32, "=");
+        /* 历史记录区：半透明底 */
+        y += line_h * 2 + 18;
+        fill_round(wx + 8, y - 2, ww - 16, bottom - y - 4, 4, 0x0c1424);
         {
-            int start = nlines - (bottom - y) / line_h;
+            int start = nlines - (bottom - y - 4) / line_h;
             int i;
             if (start < 0) start = 0;
-            for (i = start; i < nlines; i++, y += line_h)
-                text(wx + 14, y, lines[i], C_DIM, SCALE_TXT);
+            for (i = start; i < nlines; i++, y += line_h) {
+                text(wx + 14, y, lines[i],
+                     lines[i][0] == '=' ? C_ACCENT : C_DIM, SCALE_TXT);
+            }
         }
         return 1;
     }
@@ -1275,41 +1316,68 @@ static int app_draw_custom(int wx, int wy, int ww, int bottom)
     case APP_SCRIPT: {
         int i;
         const char *hint = app == APP_SCRIPT
-            ? (lang ? "Ctrl+R run   Esc save&quit" : "Ctrl+R 运行   Esc 保存退出")
-            : (lang ? "Esc save & quit   arrows move" : "Esc 保存退出   方向键移动");
-        fill(wx + 8, y, ww - 16, (line_h + 2) * (ui_en + 1), C_TITLE);
+            ? (lang ? "Ctrl+R 运行 · Esc 保存退出 · 方向键移动" : "Ctrl+R run · Esc save · arrows move")
+            : (lang ? "Esc 保存退出 · 方向键移动" : "Esc save · arrows move");
+        int box_w = ww - 16;
+        int box_h = (line_h + 2) * (ui_en + 1);
+        /* 编辑区：圆角边框 */
+        fill_round(wx + 6, y - 2, box_w + 4, box_h + 4, 6, 0x2a3a5c);
+        fill_round(wx + 8, y, box_w, box_h, 4, C_TITLE);
         for (i = 0; i < ui_en; i++) {
-            char row[UI_ECOLS + 4];
+            char row[UI_ECOLS + 8];
             int ry = y + 2 + i * (line_h + 2);
-            if (i == ui_er) fill(wx + 8, ry - 1, ww - 16, line_h, C_SEL);
-            snprintf(row, sizeof row, "%2d %s%s", i + 1, ui_ed[i],
+            if (i == ui_er) {
+                fill(wx + 8, ry - 1, box_w, line_h, 0x1f6feb);
+                fill(wx + 8, ry - 1, 2, line_h, C_ACCENT);  /* 光标竖线 */
+            }
+            snprintf(row, sizeof row, "%3d  %s%s", i + 1, ui_ed[i],
                      i == ui_er ? "_" : "");
             text(wx + 14, ry, row, C_FG, SCALE_TXT);
         }
-        text(wx + 10, bottom - 12, hint, C_DIM, 1);
+        fill(wx + 8, bottom - 14, ww - 16, 1, C_DIM);
+        text(wx + 10, bottom - 13, hint, C_DIM, 1);
         return 1;
     }
     case APP_REMIND: {
         int i;
-        draw_input_box(wx + 10, y, ww - 20, lang ? "+ " : "+ ");
-        y += line_h + 10;
+        /* 输入框：圆角边框 */
+        fill_round(wx + 8, y, ww - 16, line_h + 10, 4, C_TITLE);
+        fill(wx + 10, y + line_h + 2, ww - 20, 1, C_DIM);
+        draw_input_box(wx + 16, y + 3, ww - 32, lang ? "➕ " : "+ ");
+        y += line_h + 14;
+        /* 列表 */
         for (i = 0; i < rmd_n; i++, y += line_h) {
-            char row[RMD_LEN + 8];
+            char row[RMD_LEN + 12];
             if (y + line_h - 2 > bottom - 14) break;
-            if (i == ui_sel) fill(wx + 8, y - 1, ww - 16, line_h, C_SEL);
-            snprintf(row, sizeof row, "[%c] %s", rmd_done[i] ? 'x' : ' ',
-                     rmd_txt[i]);
-            text(wx + 14, y, row, rmd_done[i] ? C_DIM : C_FG, SCALE_TXT);
+            if (i == ui_sel) {
+                fill(wx + 8, y - 1, ww - 16, line_h, C_SEL);
+                fill(wx + 8, y - 1, 3, line_h, C_ACCENT);
+                text(wx + 14, y, "▶", C_ACCENT, SCALE_TXT);
+            }
+            snprintf(row, sizeof row, "[%c]  %s",
+                     rmd_done[i] ? 'v' : ' ', rmd_txt[i]);
+            text(wx + 22, y, row,
+                 rmd_done[i] ? C_DIM : C_FG, SCALE_TXT);
         }
-        text(wx + 10, bottom - 12, ui_msg[0] ? ui_msg :
-             (lang ? "space toggle  d delete  Esc close"
-                   : "空格勾选  d 删除  Esc 关闭"), C_DIM, 1);
+        if (rmd_n == 0) {
+            text(wx + 14, y + 2, lang ? "(暂无，输入后回车添加)"
+                                       : "(empty — type & Enter to add)",
+                 C_DIM, SCALE_TXT);
+        }
+        fill(wx + 8, bottom - 14, ww - 16, 1, C_DIM);
+        text(wx + 10, bottom - 13, ui_msg[0] ? ui_msg :
+             (lang ? "空格勾选 · d 删除 · Esc 关闭"
+                   : "space toggle · d delete · Esc close"), C_DIM, 1);
         return 1;
     }
     case APP_CALENDAR: {
         time_t t = time(NULL) + (time_t)ui_cal_m * 31 * 86400;
+        time_t now_real = time(NULL);
+        struct tm *tm_real = localtime(&now_real);
         struct tm tm0, *tm_now = localtime(&t);
         int year, mon, lead, days, i, d, col0;
+        int today_m = tm_real->tm_mon, today_d = tm_real->tm_mday;
+        int is_this_month = (ui_cal_m == 0);
         static const char *mzh[12] =
             {"一月","二月","三月","四月","五月","六月","七月","八月",
              "九月","十月","十一月","十二月"};
@@ -1318,76 +1386,114 @@ static int app_draw_custom(int wx, int wy, int ww, int bottom)
              "August","September","October","November","December"};
         static const char *wzh[7] = {"日","一","二","三","四","五","六"};
         static const char *wen[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-        char head[64];
+        char head[96];
         year = tm_now->tm_year + 1900; mon = tm_now->tm_mon;
         tm0 = *tm_now; tm0.tm_mday = 1; tm0.tm_hour = 12;
         mktime(&tm0);
         lead = tm0.tm_wday;
         tm0.tm_mday = 32; mktime(&tm0);
         days = 32 - tm0.tm_mday;
-        snprintf(head, sizeof head, "%d  %s", year, lang ? men[mon] : mzh[mon]);
+        snprintf(head, sizeof head, "%d  %s%s", year, lang ? men[mon] : mzh[mon],
+                 is_this_month ? (lang ? "  · 本月" : "  · current") : "");
+        /* 月份标题：粗体居中 + 圆角底色 */
+        fill_round(wx + ww / 2 - text_w(head, 2) / 2 - 14, y - 2,
+                   text_w(head, 2) + 28, line_h * 2 + 6, 6, C_TITLE);
         text(wx + ww / 2 - text_w(head, 2) / 2, y, head, C_ACCENT, 2);
-        y += line_h * 2 + 6;
+        y += line_h * 2 + 10;
+        /* 星期标题行：底色条 */
+        fill(wx + 8, y - 2, ww - 16, line_h + 2, 0x0c1424);
         for (i = 0; i < 7; i++)
             text(wx + 14 + i * 60, y, lang ? wen[i] : wzh[i], C_DIM, SCALE_TXT);
-        y += line_h + 4;
+        y += line_h + 6;
         col0 = wx + 14;
         for (d = 1; d <= days; d++) {
             char cell[8];
             int cx = col0 + ((lead + d - 1) % 7) * 60;
             int cy = y + ((lead + d - 1) / 7) * (line_h + 4);
+            int is_today = is_this_month && (d == today_d);
+            int dow = (lead + d - 1) % 7;
+            int c = C_FG;
+            if (is_today) {
+                /* 今天：圆角高亮底 */
+                fill_round(cx - 6, cy - 2, 28, line_h + 4, 4, C_SEL);
+                fill_round(cx - 6, cy - 2, 28, line_h + 4, 4, C_SEL);
+                c = C_ACCENT;
+            } else if (dow == 0 || dow == 6) {
+                c = C_DIM;  /* 周末稍暗 */
+            }
             snprintf(cell, sizeof cell, "%2d", d);
-            text(cx, cy, cell, C_FG, SCALE_TXT);
+            text(cx, cy, cell, c, SCALE_TXT);
         }
         text(wx + 10, bottom - 12,
-             lang ? "up/down prev/next month  t today  Esc close"
-                  : "上/下月：上/下方向键  t 回到今天  Esc 关闭", C_DIM, 1);
+             lang ? "上/下月：↑↓ 或 h/l · t 回到今天 · Esc 关闭"
+                  : "prev/next: ↑↓ or h/l · t today · Esc close", C_DIM, 1);
         return 1;
     }
     case APP_CLOCK: {
         time_t t = time(NULL);
         struct tm *tm = localtime(&t);
-        char big[16], date[64];
-        int yy = wy + 60;
+        char big[16], date[96], weekday[32];
+        int yy = wy + 30;
+        /* 圆角背景 */
+        fill_round(wx + 8, yy - 60, ww - 16, 160, 10, C_TITLE);
         snprintf(big, sizeof big, "%02d:%02d:%02d", tm->tm_hour,
                  tm->tm_min, tm->tm_sec);
-        text(wx + ww / 2 - text_w(big, 4) / 2, yy, big, C_ACCENT, 4);
-        snprintf(date, sizeof date, "%d-%02d-%02d",
-                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
+        /* 描边效果：先画 8 方向黑色阴影，再画主色 */
+        {
+            int cx = wx + ww / 2 - text_w(big, 4) / 2;
+            int cy = yy;
+            text(cx + 1, cy + 1, big, 0x040c1e, 4);
+            text(cx + 1, cy - 1, big, 0x040c1e, 4);
+            text(cx - 1, cy + 1, big, 0x040c1e, 4);
+            text(cx - 1, cy - 1, big, 0x040c1e, 4);
+            text(cx, cy, big, C_ACCENT, 4);
+        }
+        {
+            static const char *wzh[7] = {"周日","周一","周二","周三","周四","周五","周六"};
+            static const char *wen[7] = {"Sunday","Monday","Tuesday","Wednesday",
+                                         "Thursday","Friday","Saturday"};
+            snprintf(weekday, sizeof weekday, "%s",
+                     lang ? wzh[tm->tm_wday] : wen[tm->tm_wday]);
+        }
+        snprintf(date, sizeof date,
+                 lang ? "%d 年 %02d 月 %02d 日  ·  %s"
+                      : "%04d-%02d-%02d  ·  %s",
+                 tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, weekday);
         text(wx + ww / 2 - text_w(date, 2) / 2, yy + 80, date, C_FG, 2);
         {
             FILE *f = fopen("/proc/uptime", "r");
             if (f) {
                 double up; char s[64];
                 if (fscanf(f, "%lf", &up) == 1) {
-                    snprintf(s, sizeof s, lang ? "uptime %dh %dm" : "已运行 %d 小时 %d 分",
+                    snprintf(s, sizeof s, lang ? "已运行 %d 小时 %d 分" : "uptime %dh %dm",
                              (int)(up / 3600), (int)(up / 60) % 60);
-                    text(wx + ww / 2 - text_w(s, 2) / 2, yy + 120, s, C_DIM, 2);
+                    text(wx + ww / 2 - text_w(s, 2) / 2, yy + 118, s, C_DIM, 2);
                 }
                 fclose(f);
             }
         }
-        text(wx + 10, bottom - 12, lang ? "Esc close" : "Esc 关闭", C_DIM, 1);
+        text(wx + 10, bottom - 12, lang ? "Esc 关闭" : "Esc close", C_DIM, 1);
         return 1;
     }
     case APP_SHOT: {
-        text(wx + 10, y, lang ? "Screenshot" : "截屏", C_ACCENT, SCALE_TXT);
-        y += line_h + 8;
+        text(wx + 10, y, lang ? "截屏  Screenshot" : "Screenshot  截屏", C_ACCENT, SCALE_TXT);
+        y += line_h + 6;
         text(wx + 10, y,
-             lang ? "Enter/Space: save /tmp/e1shot-NN.ppm (P6 raw framebuffer)"
-                  : "回车/空格：保存 /tmp/e1shot-NN.ppm（P6 原始帧缓冲）",
+             lang ? "Enter / 空格  → 保存到 /tmp/e1shot-NN.ppm"
+                  : "Enter / Space → save to /tmp/e1shot-NN.ppm",
              C_FG, SCALE_TXT);
-        y += line_h + 4;
+        y += line_h + 2;
         text(wx + 10, y,
-             lang ? "convert on a PC: ffmpeg -i shot.ppm shot.png"
-                  : "在电脑上转换：ffmpeg -i shot.ppm shot.png",
+             lang ? "在电脑上转换：ffmpeg -i shot.ppm shot.png"
+                  : "convert on a PC: ffmpeg -i shot.ppm shot.png",
              C_DIM, SCALE_TXT);
         y += line_h + 12;
-        /* 缩略：每 8x8 像素取一点 */
+        /* 缩略区：圆角边框 */
         {
             int tw = ww - 32, th = tw * H / W, x2, y2;
             if (th > bottom - y - 20) { th = bottom - y - 20; tw = th * W / H; }
-            fill_round(wx + 16, y, tw, th, 4, C_TITLE);
+            fill_round(wx + 12, y - 4, tw + 8, th + 8, 4, 0x2a3a5c);
+            fill_round(wx + 16, y, tw, th, 2, 0x000000);
             for (y2 = 0; y2 < th; y2++)
                 for (x2 = 0; x2 < tw; x2++) {
                     int sx = x2 * W / tw, sy = y2 * H / th;
@@ -1395,7 +1501,10 @@ static int app_draw_custom(int wx, int wy, int ww, int bottom)
                 }
             y += th + 8;
         }
-        if (ui_msg[0]) text(wx + 10, y, ui_msg, C_ACCENT, SCALE_TXT);
+        if (ui_msg[0]) {
+            fill_round(wx + 8, y, ww - 16, line_h + 4, 3, C_SEL);
+            text(wx + 14, y + 2, ui_msg, C_FG, SCALE_TXT);
+        }
         return 1;
     }
     case APP_FINDMY: {
