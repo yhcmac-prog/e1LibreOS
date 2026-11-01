@@ -72,15 +72,23 @@ keep_cc() {
 }
 
 # 内核与驱动模块统一来自 Alpine linux-virt 包（版本自洽，模块 vermagic 一致）
-# 镜像优先级：阿里云（对 wget/curl UA 均友好）-> 官方 dl-cdn
-for mirror in https://mirrors.aliyun.com/alpine https://dl-cdn.alpinelinux.org/alpine; do
-    if curl -fsL --max-time 15 -o /dev/null "$mirror/v3.21/main/$ARCH/"; then
-        ALPINE_REPO="$mirror/v3.21/main/$ARCH"
-        break
-    fi
-done
-[ -n "${ALPINE_REPO:-}" ] || die "所有 Alpine 镜像均不可达"
+# 先看缓存里有没有完整 APK，有就不强制 Alpine 网络可达
 KVAPK="$DL/linux-virt-$ARCH.apk"
+ALPINE_REPO=""
+if [ -s "$KVAPK" ] && gzip -t "$KVAPK" 2>/dev/null; then
+    msg "命中 Alpine linux-virt 缓存"
+else
+    # 镜像优先级：阿里云（对 wget/curl UA 均友好）-> 官方 dl-cdn
+    for mirror in https://mirrors.aliyun.com/alpine https://dl-cdn.alpinelinux.org/alpine; do
+        if curl -fsL --max-time 15 -o /dev/null "$mirror/v3.21/main/$ARCH/"; then
+            ALPINE_REPO="$mirror/v3.21/main/$ARCH"
+            break
+        fi
+    done
+    [ -n "$ALPINE_REPO" ] || die "所有 Alpine 镜像均不可达（且本地无完整 linux-virt 缓存）"
+fi
+
+# （syslinux / busybox 同理：缓存命中就不探测网络）
 if [ -s "$KVAPK" ] && ! gzip -t "$KVAPK" 2>/dev/null; then
     rm -f "$KVAPK"   # 上次中断可能留下截断文件
 fi
