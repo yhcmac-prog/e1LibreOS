@@ -382,8 +382,8 @@ cp -R rootfs "$BUILD/stage"
 # 变体品牌写入 os-release（setup-e1os / e1demo 据此决定默认安装 profile）
 if [ "$NEED_GFX" = 1 ]; then
     # workstation / mobile 共用 e1wm 图形界面，仅品牌字串与模式开关不同
-    sed -i '' -e "s/^VERSION=.*/VERSION=\"1.0 (Libre) $VN\"/" \
-              -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"e1LibreOS 1.0 (Libre) $VN\"/" \
+    sed -i '' -e "s/^VERSION=.*/VERSION=\"1.2 (Libre) $VN\"/" \
+              -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"e1LibreOS 1.2 (Libre) $VN\"/" \
         "$BUILD/stage/etc/os-release"
     # Live 模式 tty1 直接进入自研图形界面 e1wm（磁盘安装版由 setup-e1os 负责），
     # tty2 保留文字控制台（e1pkg 窗口的操作提示指向 Alt+F2）
@@ -442,7 +442,7 @@ PROMPT 0
 TIMEOUT 20
 
 LABEL linux
-  MENU LABEL ^e1LibreOS 1.0 (Libre) $VN — Live
+  MENU LABEL ^e1LibreOS 1.2 (Libre) $VN — Live
   KERNEL /boot/vmlinuz-virt
 EOF
     # workstation / mobile：VESA 32bpp 图形模式（vga=0x200|mode），图形模式是
@@ -483,7 +483,7 @@ set timeout=2
 set default=0
 search --no-floppy --file /boot/vmlinuz-virt --set=root || search --no-floppy --file /EFI/BOOT/BOOTX64.EFI --set=root
 
-menuentry "e1LibreOS 1.0 (Libre) $VN — Live" {
+menuentry "e1LibreOS 1.2 (Libre) $VN — Live" {
     linux /boot/vmlinuz-virt $KAPPEND
     initrd /boot/initramfs-e1.gz
 }
@@ -526,15 +526,15 @@ PY
         msg "缺少 downloads/grub/grubx64.efi，ISO 将仅支持 BIOS"
     fi
 
-    "$MKISOFS" -quiet -o "$BUILD/e1LibreOS-1.0-$VARIANT-x86_64.iso" \
+    "$MKISOFS" -quiet -o "$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso" \
         -b isolinux/isolinux.bin -c isolinux/boot.cat \
         -no-emul-boot -boot-load-size 4 -boot-info-table \
         $EFI_ARGS \
-        -J -R -V "e1LibreOS_1.0_${VN}" "$BUILD/isostage"
+        -J -R -V "e1LibreOS_1.2_${VN}" "$BUILD/isostage"
     # 写入 isohybrid MBR，使其可 dd 到 U 盘引导
     # E1OS_HYBRID=0 可跳过（混合 MBR 会让部分 UEFI 固件把光盘误判为分区硬盘）
     if [ "${E1OS_HYBRID:-1}" = 1 ]; then
-        python3 tools/isohybrid.py "$BUILD/e1LibreOS-1.0-$VARIANT-x86_64.iso" "$DL/isohdpfx.bin" \
+        python3 tools/isohybrid.py "$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso" "$DL/isohdpfx.bin" \
             && msg "已写入 isohybrid MBR（可 dd 到 U 盘）"
     fi
     rm -rf "$BUILD/isostage"
@@ -548,7 +548,7 @@ if [ -f "$DL/grub/grubaa64.efi" ]; then
     sh tools/build-arm-image.sh \
         "$BUILD/vmlinuz-virt-$ARCH" "$BUILD/initramfs-e1.gz" \
         "$DL/grub/grubaa64.efi" "$VARIANT" \
-        "$BUILD/e1LibreOS-1.0-$VARIANT-aarch64.img"
+        "$BUILD/e1LibreOS-1.2-$VARIANT-aarch64.img"
 else
     die "缺少 downloads/grub/grubaa64.efi，无法生成 aarch64 镜像"
 fi
@@ -563,7 +563,7 @@ cat <<EOF
   1) 直接内核启动:  ./run.sh        （需要 qemu-system-x86_64）
   2) ISO 启动:      ./run.sh iso    （若已生成 ISO）
   3) VirtualBox:    ./run-vbox.sh   （macOS 已验证）
-  4) 真机/U 盘:     dd if=$BUILD/e1LibreOS-1.0-$VARIANT-x86_64.iso of=/dev/你的U盘
+  4) 真机/U 盘:     dd if=$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso of=/dev/你的U盘
 
 变体:
   ./build.sh                                  -> Server 版（命令行，x86_64 ISO）
