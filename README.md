@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | **English**
 
-e1LibreOS 1.1 (Libre) is a minimal bootable Linux distribution built around the
+e1LibreOS 1.2 (Libre) is a minimal bootable Linux distribution built around the
 Fedora philosophy of free software. Both the kernel and user space come entirely
 from upstream free-software components, and the system images can be
 cross-built on macOS or Linux using plain scripts — no root access required.
@@ -42,10 +42,10 @@ Get them from [GitHub Releases](../../releases):
 
 | File | Architecture | Firmware | Notes |
 |---|---|---|---|
-| `e1LibreOS-1.0-server-x86_64.iso` | x86_64 | BIOS+UEFI | Command line |
-| `e1LibreOS-1.0-workstation-x86_64.iso` | x86_64 | BIOS+UEFI | Graphical desktop |
-| `e1LibreOS-1.0-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | Touchscreen variant |
-| `e1LibreOS-1.0-{server,workstation,mobile}-aarch64.img` | aarch64 | UEFI | `dd` to disk / SD card |
+| `e1LibreOS-1.2-server-x86_64.iso` | x86_64 | BIOS+UEFI | Command line |
+| `e1LibreOS-1.2-workstation-x86_64.iso` | x86_64 | BIOS+UEFI | Graphical desktop |
+| `e1LibreOS-1.2-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | Touchscreen variant |
+| `e1LibreOS-1.2-{server,workstation,mobile}-aarch64.img` | aarch64 | UEFI | `dd` to disk / SD card |
 
 ### Virtual machine (VirtualBox)
 
@@ -62,9 +62,9 @@ installer prompts.
 
 ```sh
 # x86_64: the ISO is isohybrid and can be dd'd directly
-sudo dd if=build/e1LibreOS-1.0-workstation-x86_64.iso of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-1.2-workstation-x86_64.iso of=/dev/sdX bs=4M conv=fsync
 # aarch64: raw disk image
-sudo dd if=build/e1LibreOS-1.0-workstation-aarch64.img of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-1.2-workstation-aarch64.img of=/dev/sdX bs=4M conv=fsync
 ```
 
 ### Installing to disk

@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.md)
 
-e1LibreOS 1.1 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 发行版。
+e1LibreOS 1.2 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 发行版。
 内核与用户态全部来自自由软件，系统镜像可在 macOS / Linux 上纯脚本零 root 交叉构建。
 
 ## 特性一览
@@ -32,10 +32,10 @@ e1LibreOS 1.1 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 
 
 | 文件 | 架构 | 固件 | 说明 |
 |---|---|---|---|
-| `e1LibreOS-1.0-server-x86_64.iso` | x86_64 | BIOS+UEFI | 命令行 |
-| `e1LibreOS-1.0-workstation-x86_64.iso` | x86_64 | BIOS+UEFI | 图形桌面 |
-| `e1LibreOS-1.0-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | 触屏版 |
-| `e1LibreOS-1.0-{server,workstation,mobile}-aarch64.img` | aarch64 | UEFI | `dd` 到磁盘/SD 卡 |
+| `e1LibreOS-1.2-server-x86_64.iso` | x86_64 | BIOS+UEFI | 命令行 |
+| `e1LibreOS-1.2-workstation-x86_64.iso` | x86_64 | BIOS+UEFI | 图形桌面 |
+| `e1LibreOS-1.2-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | 触屏版 |
+| `e1LibreOS-1.2-{server,workstation,mobile}-aarch64.img` | aarch64 | UEFI | `dd` 到磁盘/SD 卡 |
 
 ### 虚拟机（VirtualBox）
 
@@ -50,9 +50,9 @@ Live 环境 root 自动登录（无密码）；安装后 root 默认密码见安
 
 ```sh
 # x86_64：ISO 已做 isohybrid，可直接 dd
-sudo dd if=build/e1LibreOS-1.0-workstation-x86_64.iso of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-1.2-workstation-x86_64.iso of=/dev/sdX bs=4M conv=fsync
 # aarch64：原始磁盘镜像
-sudo dd if=build/e1LibreOS-1.0-workstation-aarch64.img of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-1.2-workstation-aarch64.img of=/dev/sdX bs=4M conv=fsync
 ```
 
 ### 安装到硬盘
