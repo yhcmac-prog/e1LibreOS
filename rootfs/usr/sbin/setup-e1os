@@ -16,6 +16,7 @@
 #   HOSTNAME KEYMAP KEYMAP_VARIANT NIC IPADDR NETMASK GATEWAY DNSNS SEARCHDOMAIN
 #   ROOTPASS TIMEZONE PROXY_URL NTPCLIENT MIRROR_PICK(f=最快) USERNAME USERPASS
 #   SSHD SSH_ROOT DISKS DISKMODE(sys|data|custom|preserve)
+#   PROFILE(minimal|desktop) 安装 profile（缺省按 Live 分支推断）
 #   ESP_MB ROOT_MB HOME_MB SWAP_MB FIRMWARE(efi|bios) LBU_MEDIA(usb|data|none)
 #   ERASE_DISKS（兼容旧变量：等同 DISKS 且确认抹除）
 #
@@ -71,7 +72,7 @@ info() { printf ' %s\n' "$*" >&2; }
 
 default_profile() {
     p=$(sed -n 's/^VARIANT_ID=//p' /etc/os-release 2>/dev/null || true)
-    case "$p" in workstation|mobile) echo workstation ;; *) echo server ;; esac
+    case "$p" in desktop|mobile) echo desktop ;; *) echo minimal ;; esac
 }
 
 while [ $# -gt 0 ]; do
@@ -222,9 +223,9 @@ if [ "$AUTO" != 1 ]; then
     # ---- 安装类型（e1LibreOS 扩展问答）
     if [ -z "$PROFILE" ]; then
         dp=$(default_profile)
-        ask "Install type [1] Server (CLI)  [2] Workstation (GUI e1wm)" \
-            "$( [ "$dp" = workstation ] && echo 2 || echo 1)" PTYP
-        case "$PTYP" in 2*) PROFILE=workstation ;; *) PROFILE=server ;; esac
+        ask "Install type [1] Minimal (CLI)  [2] Desktop (GUI e1wm)" \
+            "$( [ "$dp" = desktop ] && echo 2 || echo 1)" PTYP
+        case "$PTYP" in 2*) PROFILE=desktop ;; *) PROFILE=minimal ;; esac
     fi
 
     # ---- 镜像源
@@ -252,13 +253,14 @@ if [ "$AUTO" != 1 ]; then
         ask "Enter ssh key or URL for root (or 'none')" "none" SSHKEY
     fi
 fi
-case "$PROFILE" in server|workstation) ;; *) die "unknown profile: $PROFILE" ;; esac
+case "$PROFILE" in minimal|desktop) ;; *) die "unknown profile: $PROFILE (expected minimal or desktop)" ;; esac
+PVN=$(printf '%s' "$PROFILE" | cut -c1 | tr 'a-z' 'A-Z')$(printf '%s' "$PROFILE" | cut -c2-)
 [ "$GATEWAY" = none ] && GATEWAY=""
 [ "$DNSDOMAIN" = none ] && DNSDOMAIN=""
 [ "$PROXY_URL" = none ] && PROXY_URL=""
 
 # ---------------------------------------------------------------- 内核/引导参数
-if [ "$PROFILE" = workstation ]; then
+if [ "$PROFILE" = desktop ]; then
     KERNPKG=linux-lts; KERN=vmlinuz-lts; INITRD=initramfs-lts; KVERPAT='-lts$'
 else
     KERNPKG=linux-virt; KERN=vmlinuz-virt; INITRD=initramfs-virt; KVERPAT='^[0-9]'
@@ -718,9 +720,9 @@ gen_inittab() {
     MODS_BASE="virtio_pci virtio_blk virtio_scsi sd_mod sr_mod \
 virtio_net e1000 af_packet ext4 fat vfat nls_cp437 nls_iso8859-1 usb-storage"
     LOADBASE="for m in $MODS_BASE; do modprobe \$m 2>/dev/null; done; true"
-    if [ "$PROFILE" = workstation ]; then
+    if [ "$PROFILE" = desktop ]; then
         cat > "$T/etc/inittab" <<EOF
-# /etc/inittab — e1LibreOS Workstation
+# /etc/inittab — e1LibreOS Desktop
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
 ::sysinit:/bin/sh -c '$LOADBASE; for m in evdev psmouse usbhid hid_generic simpledrm; do modprobe \$m 2>/dev/null; done; true'
@@ -736,7 +738,7 @@ EOF
         fi
     else
         cat > "$T/etc/inittab" <<EOF
-# /etc/inittab — e1LibreOS Server
+# /etc/inittab — e1LibreOS Minimal
 ::sysinit:/sbin/openrc sysinit
 ::sysinit:/sbin/openrc boot
 ::sysinit:/bin/sh -c '$LOADBASE'
@@ -750,7 +752,7 @@ ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
 ::shutdown:/sbin/openrc shutdown
 EOF
     fi
-    # openrc 服务（两个 profile 通用）
+    # openrc 服务（minimal / desktop 两个 profile 通用）
     # sysinit：sysfs/procfs/设备节点/日志/硬件驱动冷加载（hwdrivers 会按
     # /sys 设备自动 modprobe 网卡/磁盘驱动）
     RC="chroot $T"
@@ -775,7 +777,7 @@ install_extlinux_bios() {
     mount -t devtmpfs devtmpfs "$MNT/dev" 2>/dev/null || true
     chroot "$MNT" extlinux --install /boot || die "extlinux --install failed"
     dd if="$MNT/usr/share/syslinux/mbr.bin" of="$DISK" bs=440 count=1 conv=notrunc status=none
-    VGA=""; [ "$PROFILE" = workstation ] && VGA="vga=0x342"
+    VGA=""; [ "$PROFILE" = desktop ] && VGA="vga=0x342"
     cat > "$MNT/boot/extlinux.conf" <<EOF
 DEFAULT e1libreos
 PROMPT 0
@@ -783,7 +785,7 @@ TIMEOUT 20
 SERIAL 0 115200
 
 LABEL e1libreos
-  MENU LABEL e1LibreOS 1.0 (Libre) $PROFILE
+  MENU LABEL e1LibreOS 1.2 (Libre) $PVN
   LINUX /boot/$KERN
   INITRD /boot/$INITRD
   APPEND root=$P_ROOT rootfstype=ext4 modules=sd-mod,usb-storage,ext4 $CONSOLES $VGA
@@ -806,7 +808,7 @@ write_grub_cfg() { # $1=额外菜单项文件内容（preserve 链式引导）
     chainfile="$1"
     mkdir -p "$MNT/boot/grub"
     VGA=""
-    [ "$FIRMWARE" = bios ] && [ "$PROFILE" = workstation ] && VGA="vga=0x342"
+    [ "$FIRMWARE" = bios ] && [ "$PROFILE" = desktop ] && VGA="vga=0x342"
     cat > "$MNT/boot/grub/grub.cfg" <<EOF
 set timeout=3
 set default=0
@@ -814,7 +816,7 @@ insmod part_gpt
 insmod ext2
 $( [ "$FIRMWARE" = efi ] && echo insmod fat )
 
-menuentry "e1LibreOS 1.0 (Libre) $PROFILE" {
+menuentry "e1LibreOS 1.2 (Libre) $PVN" {
     $( [ "$FIRMWARE" = efi ] && echo "insmod chain" )
     linux /boot/$KERN root=$P_ROOT rw rootfstype=ext4 $CONSOLES $VGA
     initrd /boot/$INITRD
@@ -925,7 +927,7 @@ write_fstab_target() {
 # ---------------------------------------------------------------- 软件包选择
 build_pkg_list() {
     PKGS="alpine-base $KERNPKG e2fsprogs"
-    if [ "$PROFILE" = workstation ]; then
+    if [ "$PROFILE" = desktop ]; then
         PKGS="$PKGS linux-firmware-none"
     fi
     case "$BOOTLOADER" in

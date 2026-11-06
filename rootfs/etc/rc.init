@@ -125,7 +125,7 @@ if [ -x /usr/local/bin/apk.static ] && [ -s /etc/apk/world ] && [ -f /etc/apk/re
         && ok "apk world restored from cache/network" ) &
 fi
 
-# workstation 图形栈：simpledrm 提供 /dev/fb0
+# desktop / mobile 图形栈：simpledrm 提供 /dev/fb0
 if [ -f "/lib/modules/$(uname -r)/kernel/drivers/gpu/drm/tiny/simpledrm.ko" ]; then
     if modprobe simpledrm 2>/dev/null; then
         ok "Load module: simpledrm (framebuffer)"

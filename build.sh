@@ -12,17 +12,23 @@ msg() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 变体
-# E1OS_VARIANT=server（默认，命令行）/ workstation（图形界面，自研 e1wm）
-#             / mobile（移动端：800x600 触屏 + 虚拟键盘，复用 e1wm）
-VARIANT=${E1OS_VARIANT:-server}
+# 五个构建分支，分两类：
+#   可直接构建：minimal（纯命令行，默认）/ desktop（e1wm 图形桌面）
+#              / mobile（800x600 触屏 + 虚拟键盘，复用 e1wm）
+#   规划占位  ：server（glibc + systemd）/ workstation（glibc + systemd + e1wm）
+#              两者尚未实现，明确报错退出，不产出伪镜像。
+VARIANT=${E1OS_VARIANT:-minimal}
 case "$VARIANT" in
-    server|workstation|mobile) ;;
-    *) die "E1OS_VARIANT 仅支持 server / workstation / mobile" ;;
+    minimal|desktop|mobile) ;;
+    server|workstation)
+        die "分支 '$VARIANT' 为规划占位（glibc + systemd 基础，workstation 另含 e1wm），当前版本尚未实现构建逻辑；可直接构建的分支: minimal / desktop / mobile"
+        ;;
+    *) die "E1OS_VARIANT 仅支持 minimal / desktop / server / workstation / mobile" ;;
 esac
 VN=$(printf '%s' "$VARIANT" | cut -c1 | tr 'a-z' 'A-Z')$(printf '%s' "$VARIANT" | cut -c2-)
-# 是否需要 e1wm 图形界面（workstation / mobile 共用同一图形栈）
+# 是否需要 e1wm 图形界面（desktop / mobile 共用同一图形栈）
 NEED_GFX=0
-[ "$VARIANT" = workstation ] && NEED_GFX=1
+[ "$VARIANT" = desktop ] && NEED_GFX=1
 [ "$VARIANT" = mobile ] && NEED_GFX=1
 
 # ---------------------------------------------------------------- 目标架构
@@ -205,10 +211,10 @@ for root in ("virtio_blk.ko", "virtio_scsi.ko", "scsi_mod.ko", "sd_mod.ko",
              "fat.ko", "vfat.ko", "nls_cp437.ko", "nls_iso8859-1.ko", "nls_utf8.ko",
              "crc32c_generic.ko"):
     add(root)
-# workstation / mobile：DRM simpledrm 显卡栈。无 legacy vesafb（CONFIG_FB_VESA 不存在），
+# desktop / mobile：DRM simpledrm 显卡栈。无 legacy vesafb（CONFIG_FB_VESA 不存在），
 # 靠 isolinux vga=0x342/0x343 进入 VESA 32bpp 图形模式，内核 CONFIG_SYSFB_SIMPLEFB
 # 依据 screen_info 创建 simple-framebuffer 设备，simpledrm 绑定后出 /dev/fb0
-if os.environ.get("E1OS_VARIANT") in ("workstation", "mobile"):
+if os.environ.get("E1OS_VARIANT") in ("desktop", "mobile"):
     for root in ("simpledrm.ko", "drm_shmem_helper.ko", "syscopyarea.ko",
                  "sysfillrect.ko", "sysimgblt.ko", "fb_sys_fops.ko",
                  "drm_kms_helper.ko", "drm.ko", "fb.ko", "i2c-core.ko",
@@ -257,7 +263,7 @@ fi
 if [ -f "$DL/unifont.hex" ]; then
     python3 tools/mkfont.py || msg "mkfont 失败，沿用旧字库"
 fi
-# e1wm: framebuffer 桌面（静态编译，零运行时依赖），workstation 版核心
+# e1wm: framebuffer 桌面（静态编译，零运行时依赖），desktop / mobile 版核心
 # 交叉编译优先用 zig cc（自带 musl + Linux 头，单文件下载即可用）；
 # 回退 musl.cc 交叉工具链
 ZIG="$DL/zig/zig"
@@ -381,7 +387,7 @@ cp -R rootfs "$BUILD/stage"
 
 # 变体品牌写入 os-release（setup-e1os / e1demo 据此决定默认安装 profile）
 if [ "$NEED_GFX" = 1 ]; then
-    # workstation / mobile 共用 e1wm 图形界面，仅品牌字串与模式开关不同
+    # desktop / mobile 共用 e1wm 图形界面，仅品牌字串与模式开关不同
     sed -i '' -e "s/^VERSION=.*/VERSION=\"1.2 (Libre) $VN\"/" \
               -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"e1LibreOS 1.2 (Libre) $VN\"/" \
         "$BUILD/stage/etc/os-release"
@@ -445,11 +451,11 @@ LABEL linux
   MENU LABEL ^e1LibreOS 1.2 (Libre) $VN — Live
   KERNEL /boot/vmlinuz-virt
 EOF
-    # workstation / mobile：VESA 32bpp 图形模式（vga=0x200|mode），图形模式是
-    # simpledrm/simple-framebuffer 出现的前提；server 保持文本控制台
-    #   workstation: vga=0x342 (VESA 0x142 640x480x32)
-    #   mobile:      vga=0x343 (VESA 0x143 800x600x32 平板触屏）
-    if [ "$VARIANT" = workstation ]; then
+    # desktop / mobile：VESA 32bpp 图形模式（vga=0x200|mode），图形模式是
+    # simpledrm/simple-framebuffer 出现的前提；minimal 保持文本控制台
+    #   desktop: vga=0x342 (VESA 0x142 640x480x32)
+    #   mobile:  vga=0x343 (VESA 0x143 800x600x32 平板触屏）
+    if [ "$VARIANT" = desktop ]; then
         KAPPEND="vga=0x342 console=tty0 console=ttyS0,115200${E1OS_AUTOFLAG:-}"
         printf '  APPEND initrd=/boot/initramfs-e1.gz %s\n' "$KAPPEND" >> "$BUILD/isostage/isolinux/isolinux.cfg"
     elif [ "$VARIANT" = mobile ]; then
@@ -565,13 +571,16 @@ cat <<EOF
   3) VirtualBox:    ./run-vbox.sh   （macOS 已验证）
   4) 真机/U 盘:     dd if=$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso of=/dev/你的U盘
 
-变体:
-  ./build.sh                                  -> Server 版（命令行，x86_64 ISO）
-  E1OS_VARIANT=workstation ./build.sh         -> Workstation 版（自研 e1wm 图形界面）
-  E1OS_VARIANT=mobile ./build.sh              -> Mobile 版（800x600 触屏 + 虚拟键盘）
+变体（E1OS_VARIANT）:
+  ./build.sh                                  -> minimal  可直接构建（纯命令行，默认，最小体积）
+  E1OS_VARIANT=desktop ./build.sh             -> desktop  可直接构建（自研 e1wm 图形桌面 640x480）
+  E1OS_VARIANT=mobile ./build.sh              -> mobile   可直接构建（800x600 触屏 + 虚拟键盘）
+  E1OS_VARIANT=server ./build.sh              -> server   规划占位（glibc + systemd，尚未实现）
+  E1OS_VARIANT=workstation ./build.sh         -> workstation 规划占位（glibc + systemd + e1wm，尚未实现）
   E1OS_ARCH=aarch64 ./build.sh                -> aarch64 UEFI 镜像（.img，交叉构建，UNTESTED）
-    两者可组合: E1OS_ARCH=aarch64 E1OS_VARIANT=workstation ./build.sh
+    两者可组合: E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh
   安装器 setup-e1os（问答与 setup-alpine 同款）支持 sys/data/custom/preserve/diskless
+  安装 profile 与 Live 分支同名: minimal（命令行）/ desktop（e1wm 图形）
 
 在虚拟机里登录后可试:
   e1pkg install e1fetch && e1fetch

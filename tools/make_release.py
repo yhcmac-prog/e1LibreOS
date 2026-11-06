@@ -38,8 +38,11 @@ Split out of e1wine into its own zero-dependency Python 3 tool:
 
 | File | Arch | Variant |
 |---|---|---|
-| e1LibreOS-1.0-{server,workstation,mobile}-x86_64.iso | x86_64 | CLI / GUI / touch |
-| e1LibreOS-1.0-{server,workstation,mobile}-aarch64.img | aarch64 | CLI / GUI / touch |
+| e1LibreOS-1.2-{minimal,desktop,mobile}-x86_64.iso | x86_64 | CLI / GUI / touch |
+| e1LibreOS-1.2-{minimal,desktop,mobile}-aarch64.img | aarch64 | CLI / GUI / touch |
+
+(`server` and `workstation` are planned glibc + systemd branches; no images
+are published for them yet.)
 
 **Tools** — e1wine for Linux (x86_64/aarch64, static musl), macOS universal,
 the macOS .app launcher, a generic Unix build, the `e1wxfly` wrapper itself,

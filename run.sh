@@ -19,8 +19,9 @@ case "$MODE" in
             -nographic
         ;;
     iso)
-        ISO=build/e1LibreOS-1.0-x86_64.iso
-        [ -f "$ISO" ] || { echo "错误: 未找到 $ISO，先运行 ./build.sh"; exit 1; }
+        ISO=build/e1LibreOS-1.2-desktop-x86_64.iso
+        [ -f "$ISO" ] || ISO=build/e1LibreOS-1.2-minimal-x86_64.iso
+        [ -f "$ISO" ] || { echo "错误: 未找到 ISO，先运行 ./build.sh"; exit 1; }
         command -v qemu-system-x86_64 >/dev/null 2>&1 || {
             echo "错误: 未安装 qemu，请运行: brew install qemu"; exit 1; }
         exec qemu-system-x86_64 \

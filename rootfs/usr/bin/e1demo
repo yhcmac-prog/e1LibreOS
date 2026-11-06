@@ -77,7 +77,7 @@
     echo ""
     echo ""
 
-    # framebuffer 探测（自研图形界面 e1wm 的依赖，workstation 版需要）
+    # framebuffer 探测（自研图形界面 e1wm 的依赖，desktop / mobile 版需要）
     echo "============ framebuffer probe ============"
     if [ -e /dev/fb0 ]; then
         echo "FB-OK: /dev/fb0 exists ($(cat /proc/fb 2>/dev/null | head -n 2))"
@@ -135,9 +135,9 @@
             AUTODISK=/dev/sda
         fi
         if [ -n "${AUTODISK:-}" ]; then
-            # 安装 profile 跟随介面变体（server/workstation，见 os-release）
+            # 安装 profile 跟随界面分支（minimal/desktop，见 os-release）
             E1PROFILE=$(sed -n 's/^VARIANT_ID=//p' /etc/os-release 2>/dev/null)
-            case "$E1PROFILE" in server|workstation) ;; *) E1PROFILE=server ;; esac
+            case "$E1PROFILE" in minimal|desktop) ;; *) E1PROFILE=minimal ;; esac
             echo "e1os_autosetup detected — installing e1LibreOS ($E1PROFILE) to $AUTODISK ..."
             setup-e1os --auto --profile "$E1PROFILE" "$AUTODISK" || echo "SETUP-FAIL"
             echo "AUTOSETUP-DONE"

@@ -13,11 +13,14 @@ access and no system compiler required.
 See [docs/BUILDING.md](docs/BUILDING.md) for the full guide.
 
 ```sh
-# build all three variants for both architectures
-E1OS_VARIANT=server      ./build.sh
-E1OS_VARIANT=workstation ./build.sh
-E1OS_VARIANT=mobile      ./build.sh
-E1OS_ARCH=aarch64 E1OS_VARIANT=workstation ./build.sh
+# build every buildable branch for both architectures
+E1OS_VARIANT=minimal ./build.sh
+E1OS_VARIANT=desktop ./build.sh
+E1OS_VARIANT=mobile  ./build.sh
+E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh
+
+# server (glibc + systemd) and workstation (glibc + systemd + e1wm) are
+# planned branches; build.sh exits with an explicit error for them.
 ```
 
 If a cross compiler is unavailable in your environment
@@ -82,7 +85,7 @@ over placeholder demos.
 
 Before opening a pull request:
 
-1. Build every variant affected by your change (server / workstation / mobile).
+1. Build every branch affected by your change (minimal / desktop / mobile).
 2. Boot the result:
    - `./run-vbox.sh` — x86_64 VirtualBox VM (BIOS)
    - `./run.sh` — local QEMU/VirtualBox helper, if available
@@ -120,7 +123,7 @@ Explain the **why** in the body when the change is non-obvious.
 ## Reporting issues
 
 Include in an issue: host OS, the exact command you ran, architecture
-(x86_64 / aarch64) and variant (server / workstation / mobile), plus the full
+(x86_64 / aarch64) and branch (minimal / desktop / mobile), plus the full
 error output or a serial/VirtualBox log. Boot and installer bugs are easiest to
 reproduce with the image attached or linked.
 

@@ -1,4 +1,4 @@
-/* e1wm — e1LibreOS 自研 framebuffer 图形界面（Workstation 版）
+/* e1wm — e1LibreOS 自研 framebuffer 图形界面（Desktop 版）
  *
  * 直接写 /dev/fb0 绘制桌面：无 X11/Wayland、无任何外部库依赖，
  * 静态编译后即为单一可执行文件，符合 e1LibreOS 的极简自研哲学。
@@ -71,7 +71,7 @@ static int W, H;
 #define C_TITLE     0x161d2e
 #define C_ACCENT    0x4f9cf9
 
-/* ---- macOS 风格（workstation）---- */
+/* ---- macOS 风格（desktop）---- */
 #define C_MENU      0x1a1a20         /* 菜单栏/ dock 底色（近黑） */
 #define C_SHADOW    0x000000         /* 窗口投影 */
 #define C_TL_CLOSE  0xff5f57         /* 红绿灯：关闭 */
@@ -95,7 +95,7 @@ static int anim_frame;
 #define ANIM_MS     28       /* 每帧间隔（总动画约 140ms） */
 static struct timeval anim_t0;
 static u32 bg_at(int y);     /* 桌面渐变底色（圆角遮挡用） */
-static void setup_start(void);   /* 图形安装向导入口（workstation） */
+static void setup_start(void);   /* 图形安装向导入口（desktop） */
 static int kbd_visible;      /* 虚拟键盘（mobile，实现在后） */
 static void kbd_hide(void);
 
@@ -224,15 +224,15 @@ static void mode_load(void)
     }
 }
 
-/* 当前变体名（从 /etc/os-release 的 VARIANT 字段读取，缺省 Workstation） */
-static char variant_str[32] = "Workstation";
+/* 当前分支名（从 /etc/os-release 的 VARIANT 字段读取，缺省 Desktop） */
+static char variant_str[32] = "Desktop";
 static void read_variant(void)
 {
     file_field("/etc/os-release", "VARIANT", variant_str, sizeof variant_str);
-    if (!variant_str[0]) snprintf(variant_str, sizeof variant_str, "Workstation");
+    if (!variant_str[0]) snprintf(variant_str, sizeof variant_str, "Desktop");
 }
 
-/* 移动模式下的字号与触摸目标尺寸（workstation 保持原值） */
+/* 移动模式下的字号与触摸目标尺寸（desktop 保持原值） */
 #define SCALE_TXT    (mode_mobile ? 2 : 1)
 #define MENU_ITEM_H  (mode_mobile ? 44 : 32)
 
@@ -477,8 +477,8 @@ enum {
     APP_X11, APP_COUNT
 };
 
-/* 可见应用数：两种图形变体均在启动器中显示全部应用
- * （mobile 网格含「安装到磁盘」文字说明；workstation dock 为图形安装向导） */
+/* 可见应用数：两种图形分支均在启动器中显示全部应用
+ * （mobile 网格含「安装到磁盘」文字说明；desktop dock 为图形安装向导） */
 static int app_count_visible(void) { return APP_COUNT; }
 
 /* 活动应用类型：静态窗口内容（lines 驱动）vs 交互驱动型 */
@@ -2087,7 +2087,7 @@ static void run_app(int app)
     case APP_TERM:  app_term_start(); break;
     case APP_BROWSER: app_br_start(); break;
     case APP_INSTALL:
-        /* workstation = 图形安装向导；mobile = 磁盘检测说明页 */
+        /* desktop = 图形安装向导；mobile = 磁盘检测说明页 */
         if (!mode_mobile) setup_start();
         else app_install();
         break;
@@ -2164,7 +2164,7 @@ static void draw_app_icon(int x, int y, int size, int app, u32 label_col)
 
 /* ================= 窗口几何与动画 ================= */
 
-/* workstation 多行 Dock 几何（绘制与鼠标命中共用，避免 24 个图标溢出 640 宽） */
+/* desktop 多行 Dock 几何（绘制与鼠标命中共用，避免 24 个图标溢出 640 宽） */
 #define DOCK_ISZ 40
 #define DOCK_GAP 8
 #define DOCK_PAD 12
@@ -2208,7 +2208,7 @@ static void grid_geom(int *cols, int *chh, int *isz, int *gy0)
     if (*isz < 40) *isz = 40;
 }
 
-/* ================= 窗口管理核心（workstation 多窗口） ================= */
+/* ================= 窗口管理核心（desktop 多窗口） ================= */
 /*
  * 每个应用一个 Win 记录：常规几何 + 最大化前的还原几何 + 所属工作区。
  * zorder 保存窗口叠放次序（末位 = 最顶层 = 焦点窗口）。
@@ -2429,7 +2429,7 @@ static void anim_finish(void)
         }
         dirty = 1;
     } else if (kind == 3) {
-        /* 最小化（移动版主页 / workstation 黄灯）：终端进程保持运行 */
+        /* 最小化（移动版主页 / desktop 黄灯）：终端进程保持运行 */
         if (mode_mobile) {
             open_app = -1;
         } else {
@@ -2519,19 +2519,19 @@ static int gesture_finish(void)
     return consumed;
 }
 
-/* ================= 图形安装向导（workstation） ================= */
+/* ================= 图形安装向导（desktop） ================= */
 /* 四种界面语言：English（默认）/ 简体中文 / 繁體中文 / Français */
 
 enum { ILG_EN = 0, ILG_ZH_CN, ILG_ZH_TW, ILG_FR, ILG_COUNT };
 enum {
-    I_LANGQ, I_PROFILE, I_PROF_WS, I_PROF_SV, I_DISKQ, I_DISK_NONE,
+    I_LANGQ, I_PROFILE, I_PROF_DT, I_PROF_MN, I_DISKQ, I_DISK_NONE,
     I_WARN, I_CONFIRM_Q, I_INSTALL_NOW, I_RUNNING, I_DONE, I_FAIL,
     I_REBOOT, I_CANCEL, I_BACK, I_NEXT, I_COUNT4
 };
 
 static int iset_lang = ILG_EN;   /* 安装器界面语言（默认英文） */
 static int setup_page = 0;       /* 0=语言 1=类型 2=磁盘 3=确认 4=安装中 5=完成 6=失败 */
-static int setup_prof = 0;       /* 0=workstation 1=server */
+static int setup_prof = 0;       /* 0=desktop 1=minimal */
 static int setup_disk_sel = -1;
 static int setup_n_disks = 0;
 static char setup_disks[8][96];  /* "/dev/vda 8G" */
@@ -2552,14 +2552,14 @@ static const char *I4[I_COUNT4][ILG_COUNT] = {
                     "\xe9\x80\x89\xe6\x8b\xa9\xe5\xae\x89\xe8\xa3\x85\xe7\xb1\xbb\xe5\x9e\x8b",
                     "\xe9\x81\xb8\xe6\x93\x87\xe5\xae\x89\xe8\xa3\x9d\xe9\xa1\x9e\xe5\x9e\x8b",
                     "Type d'installation" },
-    [I_PROF_WS] = { "Workstation (graphical desktop)",
-                    "\xe5\xb7\xa5\xe4\xbd\x9c\xe7\xab\x99\xef\xbc\x88\xe5\x9b\xbe\xe5\xbd\xa2\xe6\xa1\x8c\xe9\x9d\xa2\xef\xbc\x89",
-                    "\xe5\xb7\xa5\xe4\xbd\x9c\xe7\xab\x99\xef\xbc\x88\xe5\x9c\x96\xe5\xbd\xa2\xe6\xa1\x8c\xe9\x9d\xa2\xef\xbc\x89",
-                    "Station de travail (bureau graphique)" },
-    [I_PROF_SV] = { "Server (command line)",
-                    "\xe6\x9c\x8d\xe5\x8a\xa1\xe5\x99\xa8\xef\xbc\x88\xe5\x91\xbd\xe4\xbb\xa4\xe8\xa1\x8c\xef\xbc\x89",
-                    "\xe4\xbc\xba\xe6\x9c\x8d\xe5\x99\xa8\xef\xbc\x88\xe5\x91\xbd\xe4\xbb\xa4\xe5\x88\x97\xef\xbc\x89",
-                    "Serveur (ligne de commande)" },
+    [I_PROF_DT] = { "Desktop (e1wm)",
+                    "\xe6\xa1\x88\xe9\x9d\xa2\xef\xbc\x88" "e1wm\xef\xbc\x89",
+                    "\xe6\xa1\x88\xe9\x9d\xa2\xef\xbc\x88" "e1wm\xef\xbc\x89",
+                    "Bureau (e1wm)" },
+    [I_PROF_MN] = { "Minimal (command line)",
+                    "\xe6\x9c\x80\xe5\xb0\x8f\xef\xbc\x88\xe5\x91\xbd\xe4\xbb\xa4\xe8\xa1\x8c\xef\xbc\x89",
+                    "\xe6\x9c\x80\xe5\xb0\x8f\xef\xbc\x88\xe5\x91\xbd\xe4\xbb\xa4\xe8\xa1\x8c\xef\xbc\x89",
+                    "Minimal (ligne de commande)" },
     [I_DISKQ] = { "Select the target disk",
                   "\xe9\x80\x89\xe6\x8b\xa9\xe7\x9b\xae\xe6\xa0\x87\xe7\xa3\x81\xe7\x9b\x98",
                   "\xe9\x81\xb8\xe6\x93\x87\xe7\x9b\xae\xe6\xa8\x99\xe7\xa3\x81\xe7\xa2\x9f",
@@ -2609,7 +2609,7 @@ static const char *ILGN[ILG_COUNT] = {
     "Fran\xc3\xa7" "ais"                                      /* Français */
 };
 
-/* 安装向导页面绘制（workstation APP_INSTALL 专属；page4/5/6 日志走 lines） */
+/* 安装向导页面绘制（desktop APP_INSTALL 专属；page4/5/6 日志走 lines） */
 static void draw_setup(int wx, int wy, int ww, int wh, int bottom)
 {
     int y = wy + 26 + 10;
@@ -2651,7 +2651,7 @@ static void draw_setup(int wx, int wy, int ww, int wh, int bottom)
     case 1:
         text(wx + 10, y, IL(I_PROFILE), C_FG, SCALE_TXT); y += lh + 10;
         for (i = 0; i < 2; i++) {
-            const char *s = i == 0 ? IL(I_PROF_WS) : IL(I_PROF_SV);
+            const char *s = i == 0 ? IL(I_PROF_DT) : IL(I_PROF_MN);
             if (i == setup_prof)
                 fill_round(wx + 6, y - 3, ww - 12, lh + 6, 6, C_SEL);
             text(wx + 20, y, s, i == setup_prof ? C_FG : C_DIM, SCALE_TXT);
@@ -2678,7 +2678,7 @@ static void draw_setup(int wx, int wy, int ww, int wh, int bottom)
         {
             char sum[200];
             snprintf(sum, sizeof sum, "  %s: %s", IL(I_PROFILE),
-                     setup_prof ? IL(I_PROF_SV) : IL(I_PROF_WS));
+                     setup_prof ? IL(I_PROF_MN) : IL(I_PROF_DT));
             text(wx + 10, y, sum, C_DIM, SCALE_TXT); y += lh + 4;
             snprintf(sum, sizeof sum, "  %s: %s", IL(I_DISKQ),
                      setup_disk_sel >= 0 ? setup_disks[setup_disk_sel] : "-");
@@ -2763,7 +2763,7 @@ static void setup_launch(void)
 
     snprintf(cmd, sizeof cmd,
              "setup-e1os --auto --profile %s %s 2>&1",
-             setup_prof ? "server" : "workstation", setup_dev);
+             setup_prof ? "minimal" : "desktop", setup_dev);
     if (pipe(fds) != 0) return;
     setup_pid = fork();
     if (setup_pid == 0) {
@@ -3491,7 +3491,7 @@ static void mouse_click(void)
         return;
     }
 
-    /* ============ workstation：菜单栏 → Dock → 窗口 → 桌面 ============ */
+    /* ============ desktop：菜单栏 → Dock → 窗口 → 桌面 ============ */
 
     /* ---- 菜单栏（始终置顶可点） ---- */
     if (my < BAR_H) {
@@ -3638,7 +3638,7 @@ static void mouse_wheel(int dir)        /* dir: +1 下翻 / -1 上翻 */
 /* 非阻塞读取全部 evdev 事件。
  * 点击语义 = 按下→松开且位移 <10px（tap）；拖动进入手势流程：
  *   mobile：手势条上滑=主页（>150px 为多任务）、左右缘滑动=返回；
- *   workstation：仅 tap（无系统手势，与 macOS 桌面操作一致）。 */
+ *   desktop：仅 tap（无系统手势，与 macOS 桌面操作一致）。 */
 /* 红绿灯 / Dock 悬停跟踪（状态变化才重绘，避免每帧整屏刷新） */
 static int tl_hover = -1;        /* -1 无 / 0 关闭 / 1 最小化 / 2 最大化 */
 static int dock_hover = -1;      /* Dock 图标悬停索引 */
@@ -3688,7 +3688,7 @@ static void mouse_poll(void)
                             else                                 gest_kind = 0;
                             gest_dy = 0; gest_dx = 0;
                         } else {
-                            /* workstation：按下时判定拖动/缩放目标 */
+                            /* desktop：按下时判定拖动/缩放目标 */
                             gest_kind = 0;
                             press_title = press_resize = 0;
                             if (focused >= 0 && wins[focused].open &&
@@ -3742,7 +3742,7 @@ static void mouse_poll(void)
         if (mx > W - CUR_W) mx = W - CUR_W;
         if (my > H - CUR_H) my = H - CUR_H;
 
-        /* ---- workstation：窗口拖动 / 缩放驱动 ---- */
+        /* ---- desktop：窗口拖动 / 缩放驱动 ---- */
         if (!mode_mobile && ptr_down) {
             if (drag_mode == 2) {
                 win_apply_resize(drag_app, press_resize ? press_resize : 1, mx, my);
@@ -3832,7 +3832,7 @@ static u32 bg_at(int y)
     return c;
 }
 
-/* ---- 顶部菜单栏（workstation） / 状态栏（mobile），redraw 最后绘制保证置顶 ---- */
+/* ---- 顶部菜单栏（desktop） / 状态栏（mobile），redraw 最后绘制保证置顶 ---- */
 static void draw_menubar(void)
 {
     time_t t = time(NULL);
@@ -3896,7 +3896,7 @@ static void draw_menubar(void)
     }
 }
 
-/* ---- Dock（workstation）：悬浮层，redraw 在窗口之后绘制 ---- */
+/* ---- Dock（desktop）：悬浮层，redraw 在窗口之后绘制 ---- */
 static void draw_dock(void)
 {
     int i;
@@ -3934,7 +3934,7 @@ static void draw_desktop(void)
     }
 
     if (!mode_mobile) {
-        /* ---- workstation 桌面：无窗口时显示品牌与提示 ---- */
+        /* ---- desktop 桌面：无窗口时显示品牌与提示 ---- */
         if (topmost_of_ws(cur_ws) < 0) {
             text(W / 2 - text_w("e1LibreOS", 5) / 2, H / 3, "e1LibreOS", C_FG, 5);
             text(W / 2 - text_w(variant_str, 2) / 2, H / 3 + 88,
@@ -4151,7 +4151,7 @@ static void redraw(void)
     int i;
     draw_desktop();
 
-    /* workstation：窗口自底向上（zorder 末尾 = 最顶层 = 焦点） */
+    /* desktop：窗口自底向上（zorder 末尾 = 最顶层 = 焦点） */
     if (!mode_mobile) {
         for (i = 0; i < nz; i++) {
             int a = zorder[i];
@@ -4171,7 +4171,7 @@ static void redraw(void)
 
     if (mode_mobile && kbd_visible) kbd_draw();
 
-    /* IME 候选栏（workstation 始终显示；mobile 仅在虚拟键盘未显示时显示在屏幕底部） */
+    /* IME 候选栏（desktop 始终显示；mobile 仅在虚拟键盘未显示时显示在屏幕底部） */
     if (ime_active && (!mode_mobile || !kbd_visible)) {
         int cy = H - 36;
         fill(0, cy, W, 32, C_TITLE);
@@ -4435,7 +4435,7 @@ static void handle_key(int k)
         }
         br_key(k);
     } else if (open_app == APP_INSTALL && !mode_mobile) {
-        /* workstation 图形安装向导（Esc 关闭向导） */
+        /* desktop 图形安装向导（Esc 关闭向导） */
         if (k == 27 && setup_page != 4) { app_close(); return; }
         setup_key(k);
     } else if (open_app == APP_FINDER || open_app == APP_SETTINGS ||

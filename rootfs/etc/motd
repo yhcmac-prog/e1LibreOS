@@ -1,4 +1,4 @@
-   Welcome to \033[34me1LibreOS 1.0 (Libre)\033[0m!
+   Welcome to \033[34me1LibreOS 1.2 (Libre)\033[0m!
 
    A minimal, freedom-first Linux distro inspired by Fedora.
    Package manager: e1pkg (dnf-style).  Try:
@@ -8,6 +8,6 @@
        e1pkg list installed
 
    This is a Live system running entirely in RAM.
-   GUI workstation: install with setup-e1os --profile workstation.
+   GUI desktop: install with setup-e1os --profile desktop.
    (Note: the VGA text console cannot render CJK; Chinese is fully
-    displayed in the e1wm graphical desktop on the workstation.)
+    displayed in the e1wm graphical desktop on the desktop branch.)

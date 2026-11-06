@@ -29,7 +29,7 @@ VN=$(printf '%s' "$VARIANT" | cut -c1 | tr 'a-z' 'A-Z')$(printf '%s' "$VARIANT" 
 cat > "$STAGE/EFI/BOOT/GRUB.CFG" <<EOF
 set timeout=0
 set default=0
-menuentry "e1LibreOS 1.0 (Libre) $VN aarch64 (UNTESTED)" {
+menuentry "e1LibreOS 1.2 (Libre) $VN aarch64 (UNTESTED)" {
     linux /VMLINUZ console=tty0 console=ttyAMA0,115200
     initrd /INITRD.GZ
 }

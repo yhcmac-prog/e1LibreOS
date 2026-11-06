@@ -11,11 +11,15 @@ cross-built on macOS or Linux using plain scripts — no root access required.
 
 - **Small yet complete**: Alpine `linux-virt` 6.12 kernel + static busybox user
   space; the Live system runs entirely from memory (initramfs)
-- **Three variants**
-  - `server`: command line only, smallest footprint
-  - `workstation`: the in-house framebuffer window manager **e1wm** (no
-    X11/Wayland — it renders directly to `/dev/fb0`)
-  - `mobile`: 800×600 touchscreen layout with an on-screen keyboard, sharing e1wm
+- **Five branches** (`E1OS_VARIANT`), three buildable today
+  - `minimal`: text console only, smallest footprint — **buildable**
+  - `desktop`: the in-house framebuffer window manager **e1wm** (no
+    X11/Wayland — it renders directly to `/dev/fb0`) — **buildable**
+  - `mobile`: 800×600 touchscreen layout with an on-screen keyboard, sharing
+    e1wm — **buildable**
+  - `server`: glibc + systemd base — **planned placeholder, not buildable yet**
+  - `workstation`: glibc + systemd + **e1wm** desktop — **planned placeholder,
+    not buildable yet**
 - **Two architectures**: x86_64 (dual BIOS + UEFI bootable ISO) and
   aarch64 (UEFI raw `.img`)
 - **In-house ecosystem**
@@ -42,10 +46,13 @@ Get them from [GitHub Releases](../../releases):
 
 | File | Architecture | Firmware | Notes |
 |---|---|---|---|
-| `e1LibreOS-1.2-server-x86_64.iso` | x86_64 | BIOS+UEFI | Command line |
-| `e1LibreOS-1.2-workstation-x86_64.iso` | x86_64 | BIOS+UEFI | Graphical desktop |
-| `e1LibreOS-1.2-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | Touchscreen variant |
-| `e1LibreOS-1.2-{server,workstation,mobile}-aarch64.img` | aarch64 | UEFI | `dd` to disk / SD card |
+| `e1LibreOS-1.2-minimal-x86_64.iso` | x86_64 | BIOS+UEFI | Command line |
+| `e1LibreOS-1.2-desktop-x86_64.iso` | x86_64 | BIOS+UEFI | e1wm graphical desktop |
+| `e1LibreOS-1.2-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | Touchscreen |
+| `e1LibreOS-1.2-{minimal,desktop,mobile}-aarch64.img` | aarch64 | UEFI | `dd` to disk / SD card |
+
+`server` (glibc + systemd) and `workstation` (glibc + systemd + e1wm) are planned
+branches and have no downloadable images yet.
 
 ### Virtual machine (VirtualBox)
 
@@ -62,9 +69,9 @@ installer prompts.
 
 ```sh
 # x86_64: the ISO is isohybrid and can be dd'd directly
-sudo dd if=build/e1LibreOS-1.2-workstation-x86_64.iso of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-1.2-desktop-x86_64.iso of=/dev/sdX bs=4M conv=fsync
 # aarch64: raw disk image
-sudo dd if=build/e1LibreOS-1.2-workstation-aarch64.img of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-1.2-desktop-aarch64.img of=/dev/sdX bs=4M conv=fsync
 ```
 
 ### Installing to disk
@@ -83,10 +90,10 @@ x86_64 cross toolchain (zig) is fetched automatically on first build. See
 [docs/BUILDING.md](docs/BUILDING.md) for details.
 
 ```sh
-./build.sh                                              # x86_64 server ISO
-E1OS_VARIANT=workstation ./build.sh                     # x86_64 workstation ISO
+./build.sh                                              # x86_64 minimal ISO
+E1OS_VARIANT=desktop ./build.sh                         # x86_64 desktop ISO
 E1OS_VARIANT=mobile ./build.sh                          # x86_64 mobile ISO
-E1OS_ARCH=aarch64 E1OS_VARIANT=workstation ./build.sh   # aarch64 .img
+E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh       # aarch64 .img
 ```
 
 ## Documentation

@@ -15,33 +15,49 @@
 > 在不能写 `/usr/local` 的受限环境（如沙箱），可把 Homebrew cdrtools bottle
 > 解压到仓库内 `brew/` 目录，build.sh 会自动识别 `brew/cdrtools/*/bin/mkisofs`。
 
-## 2. 构建矩阵
+## 2. 构建分支与矩阵
+
+共 5 个分支，其中 3 个当前可直接构建：
+
+| 分支 `E1OS_VARIANT` | 状态 | 用户态 / 图形 | 镜像内容差异 |
+|---|---|---|---|
+| `minimal`（默认） | 可直接构建 | busybox + musl，纯文本控制台 | 无 e1wm 启动、无 DRM/USB-HID 模块、无 `vga=` 参数、无 `/etc/e1mode` |
+| `desktop` | 可直接构建 | busybox + musl，自研 e1wm | 含 simpledrm/DRM + USB 输入模块，`vga=0x342`（640×480×32），tty1 直接拉起 e1wm |
+| `mobile` | 可直接构建 | busybox + musl，e1wm 移动布局 | 与 desktop 同栈，另加 `vga=0x343`（800×600×32）与 `/etc/e1mode=mobile`（大字号 + 虚拟键盘） |
+| `server` | **规划占位** | glibc + systemd | 尚未实现，`build.sh` 直接报错退出，不产出镜像 |
+| `workstation` | **规划占位** | glibc + systemd + e1wm | 尚未实现（e1wm 随镜像内置），`build.sh` 直接报错退出 |
 
 ```sh
 # x86_64（输出 ISO，BIOS + UEFI 双引导）
-./build.sh                                  # server
-E1OS_VARIANT=workstation ./build.sh         # workstation（e1wm 图形）
+./build.sh                                  # minimal
+E1OS_VARIANT=desktop ./build.sh             # desktop（e1wm 图形）
 E1OS_VARIANT=mobile ./build.sh              # mobile（800x600 触屏）
 
 # aarch64（输出原始 .img，GPT + ESP + grubaa64.efi）
 E1OS_ARCH=aarch64 ./build.sh
-E1OS_ARCH=aarch64 E1OS_VARIANT=workstation ./build.sh
+E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh
 E1OS_ARCH=aarch64 E1OS_VARIANT=mobile ./build.sh
+
+# 规划占位分支（会明确报错，不产出镜像）
+E1OS_VARIANT=server ./build.sh
+E1OS_VARIANT=workstation ./build.sh
 ```
 
 产物位于 `build/`：
 
 ```
-e1LibreOS-1.0-<variant>-x86_64.iso     # 约 32 MB（含 16 MB EFI 引导镜像）
-e1LibreOS-1.0-<variant>-aarch64.img    # 67 MB，直接 dd 到磁盘
+e1LibreOS-1.2-<variant>-x86_64.iso     # 约 15 MB（含 16 MB EFI 引导镜像时为 32 MB）
+e1LibreOS-1.2-<variant>-aarch64.img    # 67 MB，直接 dd 到磁盘
 initramfs-e1.gz                         # Live initramfs
 vmlinuz-virt-<arch>                     # 内核
 ```
 
+`<variant>` 只会是可直接构建的三个名字之一。
+
 ## 3. 构建过程做了什么
 
 1. 从 Alpine v3.21 仓库下载 `linux-virt` apk，提取内核与精简模块集
-   （virtio 磁盘/网卡、ext4、FAT、workstation 另含 simpledrm/USB HID 栈）
+   （virtio 磁盘/网卡、ext4、FAT；desktop / mobile 另含 simpledrm/USB HID 栈）
 2. x86_64 获取 busybox.net 静态 busybox；aarch64 使用 Alpine `busybox-static`
 3. zig 交叉编译自研组件并放入 rootfs
 4. 生成 e1pkg 样例包仓库 `rootfs/srv/repo/repo.db`
