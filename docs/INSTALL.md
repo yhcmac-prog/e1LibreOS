@@ -59,7 +59,7 @@ GPT 分区，可精确分配各挂载点：
 | `TIMEZONE` | UTC | 时区（如 Asia/Shanghai） |
 | `PROXY_URL` | none | HTTP 代理 |
 | `NTPCLIENT` | chrony | busybox / openntpd / chrony / none |
-| `MIRROR_PICK` | 1 | 1=e1repo，2=阿里云，3=官方，f=最快 |
+| `MIRROR_PICK` | 1 | 1=e1repo（公网 IPv6 / VBox 宿主机 / 局域网，自动回退），2=阿里云，3=官方，f=最快 |
 | `USERNAME` / `USERPASS` | no / e1os | 普通用户 |
 | `SSHD` / `SSH_ROOT` | openssh / prohibit-password | SSH 服务与 root 策略 |
 | `DISKMODE` | sys | sys / data / custom / preserve / none |

@@ -26,3 +26,13 @@
 *.pdb
 .DS_Store
 github_login_cookies.json
+
+# Agent 工作目录
+.trae/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 用户临时资料
+*.rtf

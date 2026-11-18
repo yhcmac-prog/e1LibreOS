@@ -19,8 +19,10 @@ E1OS_VARIANT=desktop ./build.sh
 E1OS_VARIANT=mobile  ./build.sh
 E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh
 
-# server (glibc + systemd) and workstation (glibc + systemd + e1wm) are
-# planned branches; build.sh exits with an explicit error for them.
+# server (glibc + systemd) and workstation (glibc + systemd + e1wm) are built by
+# tools/build-glibc-image.sh (Arch bootstrap rootfs + systemd as PID 1, x86_64 only)
+E1OS_VARIANT=server ./build.sh
+E1OS_VARIANT=workstation ./build.sh
 ```
 
 If a cross compiler is unavailable in your environment

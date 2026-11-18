@@ -7,21 +7,26 @@ cd "$(dirname "$0")"
 DL=downloads
 BUILD=build
 SRC=packages/src
+VER=2.0
 
 msg() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 变体
 # 五个构建分支，分两类：
-#   可直接构建：minimal（纯命令行，默认）/ desktop（e1wm 图形桌面）
+#   可直接构建：minimal（Alpine/musl 纯命令行，默认）/ desktop（e1wm 图形桌面）
 #              / mobile（800x600 触屏 + 虚拟键盘，复用 e1wm）
-#   规划占位  ：server（glibc + systemd）/ workstation（glibc + systemd + e1wm）
-#              两者尚未实现，明确报错退出，不产出伪镜像。
+#   可直接构建：server（Arch/glibc + systemd，无图形）
+#              / workstation（Arch/glibc + systemd + e1wm）
+#              两条 glibc 分支委托 tools/build-glibc-image.sh 独立实现。
 VARIANT=${E1OS_VARIANT:-minimal}
 case "$VARIANT" in
     minimal|desktop|mobile) ;;
     server|workstation)
-        die "分支 '$VARIANT' 为规划占位（glibc + systemd 基础，workstation 另含 e1wm），当前版本尚未实现构建逻辑；可直接构建的分支: minimal / desktop / mobile"
+        if [ "${E1OS_ARCH:-x86_64}" != x86_64 ]; then
+            die "分支 '$VARIANT' 目前仅支持 x86_64"
+        fi
+        exec sh tools/build-glibc-image.sh "$VARIANT"
         ;;
     *) die "E1OS_VARIANT 仅支持 minimal / desktop / server / workstation / mobile" ;;
 esac
@@ -268,15 +273,21 @@ fi
 # 回退 musl.cc 交叉工具链
 ZIG="$DL/zig/zig"
 GCC_X="$DL/x86_64-linux-musl-cross/bin/x86_64-linux-musl-gcc"
-if [ ! -x "$ZIG" ]; then
-    msg "下载 zig 交叉编译器（编译自研 e1wm 图形界面，约 45MB）"
-    if curl -fL -C - --retry 2 -o "$DL/zig.tar.xz" \
-        https://ziglang.org/download/0.11.0/zig-macos-x86_64-0.11.0.tar.xz; then
+# zig 安装目录若解包不完整（症状：cc 时报 lib/libc/musl 源文件找不到），
+# 先用本地 tar.xz 重新解包；没有或损坏才重新下载
+if [ ! -x "$ZIG" ] || ! "$ZIG" version >/dev/null 2>&1; then
+    if [ -s "$DL/zig.tar.xz" ] && xz -t "$DL/zig.tar.xz" 2>/dev/null; then
+        msg "使用本地 zig.tar.xz 重新解包（修复不完整安装）"
+    else
+        msg "下载 zig 交叉编译器（编译自研 e1wm 图形界面，约 45MB）"
+        curl -fL -C - --retry 2 -o "$DL/zig.tar.xz" \
+            https://ziglang.org/download/0.11.0/zig-macos-x86_64-0.11.0.tar.xz \
+            || { rm -f "$DL/zig.tar.xz"; msg "zig 下载失败，回退 musl.cc 工具链"; }
+    fi
+    if [ -s "$DL/zig.tar.xz" ] && xz -t "$DL/zig.tar.xz" 2>/dev/null; then
+        rm -rf "$DL/zig"
         mkdir -p "$DL/zig"
         tar -xJf "$DL/zig.tar.xz" -C "$DL/zig" --strip-components 1
-    else
-        rm -f "$DL/zig.tar.xz"
-        msg "zig 下载失败，回退 musl.cc 工具链"
     fi
 fi
 if [ ! -x "$ZIG" ] && [ ! -x "$GCC_X" ]; then
@@ -388,8 +399,8 @@ cp -R rootfs "$BUILD/stage"
 # 变体品牌写入 os-release（setup-e1os / e1demo 据此决定默认安装 profile）
 if [ "$NEED_GFX" = 1 ]; then
     # desktop / mobile 共用 e1wm 图形界面，仅品牌字串与模式开关不同
-    sed -i '' -e "s/^VERSION=.*/VERSION=\"1.2 (Libre) $VN\"/" \
-              -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"e1LibreOS 1.2 (Libre) $VN\"/" \
+    sed -i '' -e "s/^VERSION=.*/VERSION=\"$VER (Libre) $VN\"/" \
+              -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"e1LibreOS $VER (Libre) $VN\"/" \
         "$BUILD/stage/etc/os-release"
     # Live 模式 tty1 直接进入自研图形界面 e1wm（磁盘安装版由 setup-e1os 负责），
     # tty2 保留文字控制台（e1pkg 窗口的操作提示指向 Alt+F2）
@@ -433,8 +444,16 @@ cp "$DL/vmlinuz-virt-$ARCH" "$BUILD/vmlinuz-virt-$ARCH"
 if [ "$ARCH" = x86_64 ]; then
 # x86_64：ISO（isolinux + El Torito，isohybrid 后可 dd 到 U 盘）
 MKISOFS=""
-command -v mkisofs >/dev/null 2>&1 && MKISOFS=mkisofs
-for m in brew/cdrtools/*/bin/mkisofs; do [ -x "$m" ] && MKISOFS="$m"; done
+# 查找顺序：仓库内源码构建(host-tools) → MacPorts(/opt/local) → PATH
+for m in build/host-tools/bin/mkisofs /opt/local/bin/mkisofs; do
+    [ -x "$m" ] && MKISOFS="$m" && break
+done
+if [ -z "$MKISOFS" ]; then
+    command -v mkisofs >/dev/null 2>&1 && MKISOFS=mkisofs
+fi
+if [ -z "$MKISOFS" ]; then
+    command -v xorrisofs >/dev/null 2>&1 && MKISOFS=xorrisofs
+fi
 if [ -n "$MKISOFS" ] && [ -f "$DL/isolinux.bin" ]; then
     msg "生成可启动 ISO (isolinux + El Torito)"
     rm -rf "$BUILD/isostage"
@@ -448,7 +467,7 @@ PROMPT 0
 TIMEOUT 20
 
 LABEL linux
-  MENU LABEL ^e1LibreOS 1.2 (Libre) $VN — Live
+  MENU LABEL ^e1LibreOS $VER (Libre) $VN — Live
   KERNEL /boot/vmlinuz-virt
 EOF
     # desktop / mobile：VESA 32bpp 图形模式（vga=0x200|mode），图形模式是
@@ -467,16 +486,14 @@ EOF
     fi
 
     # ---- UEFI 双引导：super-floppy FAT16 El Torito EFI 引导镜像 ----
-    # Ubuntu 签名 grubx64.efi（PE32+，含 iso9660/search/linux 模块）位于
-    # 镜像内 /EFI/BOOT/BOOTX64.EFI；grub.cfg 先 search 光盘卷
-    # 再加载 /boot 下内核（与 BIOS 共用同一份内核）。
+    # downloads/grub/grubx64.efi 是由 GRUB 2.12 all-modules 生成的 standalone
+    # EFI（内嵌 search/menuentry/linux/initrd 启动配置），位于镜像内
+    # /EFI/BOOT/BOOTX64.EFI；它直接 search 光盘卷上的 /boot/vmlinuz-virt
+    # 并加载内核（与 BIOS 共用同一份内核）。也可用 E1OS_GRUB_BIN 覆盖。
     # 布局与 Alpine/xorriso 一致：FAT 文件系统从扇区 0 开始，MBR 分区表
     # 只有一个起始 LBA=0 的覆盖分区（super-floppy）。固件将 El Torito
     # EFI 项映射为 RAM 盘后直接挂载其文件系统，FAT 必须位于 LBA0。
     EFI_ARGS=""
-    # grub 二进制选择：Alpine 版 grubx64-alpine.efi 实测可在 VBox/OVMF 直接
-    # 引导（Ubuntu 签名版 grubx64.efi 在部分 OVMF 上 StartImage 即崩溃黑屏）；
-    # 可用 E1OS_GRUB_BIN 覆盖
     GRUB_BIN="${E1OS_GRUB_BIN:-$DL/grub/grubx64-alpine.efi}"
     [ -f "$GRUB_BIN" ] || GRUB_BIN="$DL/grub/grubx64.efi"
     if [ -f "$GRUB_BIN" ]; then
@@ -489,7 +506,7 @@ set timeout=2
 set default=0
 search --no-floppy --file /boot/vmlinuz-virt --set=root || search --no-floppy --file /EFI/BOOT/BOOTX64.EFI --set=root
 
-menuentry "e1LibreOS 1.2 (Libre) $VN — Live" {
+menuentry "e1LibreOS $VER (Libre) $VN — Live" {
     linux /boot/vmlinuz-virt $KAPPEND
     initrd /boot/initramfs-e1.gz
 }
@@ -532,20 +549,20 @@ PY
         msg "缺少 downloads/grub/grubx64.efi，ISO 将仅支持 BIOS"
     fi
 
-    "$MKISOFS" -quiet -o "$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso" \
+    "$MKISOFS" -quiet -o "$BUILD/e1LibreOS-$VER-$VARIANT-x86_64.iso" \
         -b isolinux/isolinux.bin -c isolinux/boot.cat \
         -no-emul-boot -boot-load-size 4 -boot-info-table \
         $EFI_ARGS \
-        -J -R -V "e1LibreOS_1.2_${VN}" "$BUILD/isostage"
+        -J -R -V "e1LibreOS_${VER}_${VN}" "$BUILD/isostage"
     # 写入 isohybrid MBR，使其可 dd 到 U 盘引导
     # E1OS_HYBRID=0 可跳过（混合 MBR 会让部分 UEFI 固件把光盘误判为分区硬盘）
     if [ "${E1OS_HYBRID:-1}" = 1 ]; then
-        python3 tools/isohybrid.py "$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso" "$DL/isohdpfx.bin" \
+        python3 tools/isohybrid.py "$BUILD/e1LibreOS-$VER-$VARIANT-x86_64.iso" "$DL/isohdpfx.bin" \
             && msg "已写入 isohybrid MBR（可 dd 到 U 盘）"
     fi
     rm -rf "$BUILD/isostage"
 else
-    msg "未找到 mkisofs，跳过 ISO（brew install cdrtools 后重新构建即可）"
+    msg "未找到 mkisofs，跳过 ISO（运行 sh tools/build-host-tools.sh，或 sudo port install cdrtools）"
 fi
 else
 # aarch64：GPT + FAT32 ESP EFI 原始磁盘镜像（在 Intel Mac 上交叉构建，标注 UNTESTED）
@@ -554,7 +571,7 @@ if [ -f "$DL/grub/grubaa64.efi" ]; then
     sh tools/build-arm-image.sh \
         "$BUILD/vmlinuz-virt-$ARCH" "$BUILD/initramfs-e1.gz" \
         "$DL/grub/grubaa64.efi" "$VARIANT" \
-        "$BUILD/e1LibreOS-1.2-$VARIANT-aarch64.img"
+        "$BUILD/e1LibreOS-$VER-$VARIANT-aarch64.img"
 else
     die "缺少 downloads/grub/grubaa64.efi，无法生成 aarch64 镜像"
 fi
@@ -569,14 +586,14 @@ cat <<EOF
   1) 直接内核启动:  ./run.sh        （需要 qemu-system-x86_64）
   2) ISO 启动:      ./run.sh iso    （若已生成 ISO）
   3) VirtualBox:    ./run-vbox.sh   （macOS 已验证）
-  4) 真机/U 盘:     dd if=$BUILD/e1LibreOS-1.2-$VARIANT-x86_64.iso of=/dev/你的U盘
+  4) 真机/U 盘:     dd if=$BUILD/e1LibreOS-$VER-$VARIANT-x86_64.iso of=/dev/你的U盘
 
 变体（E1OS_VARIANT）:
   ./build.sh                                  -> minimal  可直接构建（纯命令行，默认，最小体积）
   E1OS_VARIANT=desktop ./build.sh             -> desktop  可直接构建（自研 e1wm 图形桌面 640x480）
   E1OS_VARIANT=mobile ./build.sh              -> mobile   可直接构建（800x600 触屏 + 虚拟键盘）
-  E1OS_VARIANT=server ./build.sh              -> server   规划占位（glibc + systemd，尚未实现）
-  E1OS_VARIANT=workstation ./build.sh         -> workstation 规划占位（glibc + systemd + e1wm，尚未实现）
+  E1OS_VARIANT=server ./build.sh              -> server      可直接构建（Arch/glibc + systemd，无图形）
+  E1OS_VARIANT=workstation ./build.sh         -> workstation 可直接构建（Arch/glibc + systemd + e1wm）
   E1OS_ARCH=aarch64 ./build.sh                -> aarch64 UEFI 镜像（.img，交叉构建，UNTESTED）
     两者可组合: E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh
   安装器 setup-e1os（问答与 setup-alpine 同款）支持 sys/data/custom/preserve/diskless

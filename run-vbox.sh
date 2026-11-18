@@ -3,12 +3,12 @@
 # 用法: ./run-vbox.sh          启动带 GUI 窗口的虚拟机（无盘 Live）
 #       ./run-vbox.sh disk     挂 4GB 虚拟硬盘（setup-e1os 安装测试）
 #       ./run-vbox.sh clean    注销并删除测试 VM
-# 环境变量: E1OS_ISO 指定其他 ISO（如 build/e1LibreOS-1.2-desktop-x86_64.iso）
+# 环境变量: E1OS_ISO 指定其他 ISO（如 build/e1LibreOS-2.0-desktop-x86_64.iso）
 set -eu
 cd "$(dirname "$0")"
 
-ISO=${E1OS_ISO:-$PWD/build/e1LibreOS-1.2-minimal-x86_64.iso}
-[ -f "$ISO" ] || ISO="$PWD/build/e1LibreOS-1.2-x86_64.iso"   # 兼容旧命名
+ISO=${E1OS_ISO:-$PWD/build/e1LibreOS-2.0-minimal-x86_64.iso}
+[ -f "$ISO" ] || ISO="$PWD/build/e1LibreOS-2.0-x86_64.iso"   # 兼容旧命名
 VM=e1LibreOS
 VB=VBoxManage
 HD="$PWD/.vbox/e1os-test.vdi"

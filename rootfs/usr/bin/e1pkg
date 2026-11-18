@@ -36,15 +36,57 @@ EOF
 
 die() { printf "%b e1pkg error: %s%b\n" "$R" "$1" "$N" >&2; exit 1; }
 
+# 下载 URL 到文件：优先 curl（glibc 镜像自带，IPv6 字面量支持完整），
+# 否则用镜像自带的 busybox wget。URL 变量一律加引号，避免 [] 被当作通配符。
+fetch_url() { # <url> <dest> <timeout 秒>
+    if command -v curl >/dev/null 2>&1; then
+        curl -fs --connect-timeout 3 --max-time "$3" -o "$2" "$1" 2>/dev/null
+        return $?
+    fi
+    # busybox wget 的 -T 只约束读超时，对不可达地址的 connect 会一直挂起
+    # （例如没有 IPv6 路由时的字面量地址）。用看门狗给整个请求兜底。
+    rm -f "$2"
+    wget -T "$3" -q -O "$2" "$1" 2>/dev/null &
+    _fp_pid=$!
+    ( sleep "$3"; kill -9 "$_fp_pid" 2>/dev/null ) &
+    _fp_wd=$!
+    wait "$_fp_pid" 2>/dev/null
+    _fp_rc=$?
+    kill -9 "$_fp_wd" 2>/dev/null
+    wait "$_fp_wd" 2>/dev/null
+    if [ "$_fp_rc" -eq 0 ] && [ -s "$2" ]; then
+        return 0
+    fi
+    rm -f "$2"
+    return 1
+}
+
+# 是否存在全局 IPv6 地址（/proc/net/if_inet6 的 scope 字段 00 = global）。
+# 没有全局地址时直接跳过 IPv6 字面量源：在无 IPv6 路由的机器上，
+# busybox wget 的 connect 会卡死且 SIGKILL 都无效。
+has_ipv6_global() {
+    while read -r addr idx plen scope flags iface; do
+        case "$scope:$addr" in
+            00:00000000000000000000000000000001) ;;   # 跳过 ::1
+            00:*) return 0 ;;
+        esac
+    done < /proc/net/if_inet6 2>/dev/null
+    return 1
+}
+
 # 选定软件源：遍历 conf 中全部记录，取第一个可用者。
 # URL 源约定：$URL/repo.db 为索引，$URL/packages/<文件名> 为包下载地址。
 load_repo() {
     while IFS='|' read -r id name path; do
         case "$id" in ''|\#*) continue ;; esac
         case "$path" in
+            http://\[*|https://\[*)
+                has_ipv6_global || continue ;;
+        esac
+        case "$path" in
             http://*|https://*)
                 mkdir -p "$CACHE"
-                if wget -T 5 -q -O "$CACHE/repo.db" "$path/repo.db" 2>/dev/null; then
+                if fetch_url "$path/repo.db" "$CACHE/repo.db" 5; then
                     REPODIR=$path; DB=$CACHE/repo.db; return 0
                 fi ;;
             *)
@@ -122,7 +164,7 @@ cmd_install() {
         printf "%bInstalling:%b %s\n" "$G" "$N" "$p"
         case "$REPODIR" in
             http://*|https://*)
-                wget -T 60 -qO "$CACHE/$fname" "$REPODIR/packages/$fname" \
+                fetch_url "$REPODIR/packages/$fname" "$CACHE/$fname" 60 \
                     || die "failed to download $fname" ;;
             *) cp "$REPODIR/$fname" "$CACHE/" || die "cannot read package file $fname" ;;
         esac
@@ -241,8 +283,12 @@ cmd_clean() {
 
 main() {
     [ -d /var/lib/e1pkg ] || mkdir -p /var/lib/e1pkg/installed "$CACHE" 2>/dev/null
-    load_repo
     cmd="${1:-help}"; shift 2>/dev/null
+    # 只有真正需要仓库的命令才联网探测；repolist/help/clean 等直接读本地配置
+    case "$cmd" in
+        install|remove|upgrade|search|info) load_repo ;;
+        list) case "${1:-}" in available) load_repo ;; esac ;;
+    esac
     case "$cmd" in
         install)  cmd_install "$@" ;;
         remove)   cmd_remove "$@" ;;

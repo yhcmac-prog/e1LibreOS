@@ -61,7 +61,7 @@ def dev_node(ino: int, name: str, major: int, minor: int, mode: int) -> bytes:
 def entry(ino: int, name: str, st: os.stat_result, root: str) -> bytes:
     full = os.path.join(root, name)
     if stat.S_ISDIR(st.st_mode):
-        mode, size, data = S_IFDIR, 0, b""
+        mode, size, data = S_IFDIR | (st.st_mode & 0o7777), 0, b""
     elif stat.S_ISLNK(st.st_mode):
         mode, data = S_IFLNK, os.readlink(full).encode()
         size = len(data)

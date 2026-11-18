@@ -9,46 +9,54 @@ from playwright.sync_api import sync_playwright
 USER_SESSION = "wYT8SNyOiTplFr_IKpuXq1WMTRI89CW-QB_IouaLENFQwvHB"
 REPO = "yhcmac-prog/e1LibreOS"
 
-NOTES = """## What's new in v1.1
+NOTES = """## What's new in v2.0
 
-### e1wxfly — standalone application wrapper (WineBotter/Wineskin-style)
-Split out of e1wine into its own zero-dependency Python 3 tool:
-- `e1wxfly elf <exe>` — self-contained Linux program: embeds the e1wine
-  runtime (base64) plus the EXE; unpacks to `~/.cache/e1wxfly/`, auto
-  `chmod +x`, and execs. Target machine only needs python3.
-- `e1wxfly app <exe>` — macOS `.app` bundle (universal x86_64+arm64 launcher)
-- `e1wxfly wrap-x11 <binary>` — self-extracting wrapper for third-party
-  X11/Wayland applications (Firefox, xterm, GIMP, ...)
+e1LibreOS 2.0 is the first release that ships **all five branches**, rebuilt
+from one tree and runtime-verified.
 
-### e1wm desktop
-- e1Browser now supports **HTTPS** (via `openssl s_client`)
-- New **X11 Apps** launcher for third-party X11/Wayland applications
-- Removed four placeholder/demo apps (Contacts, Weather, Stocks, Dictionary)
-  — 21 real built-in applications remain
+### All five branches
+- `minimal` — busybox + musl, text console
+- `desktop` — in-house e1wm framebuffer desktop
+- `mobile` — 800×600 touch layout with on-screen keyboard
+- `server` — Arch/glibc + systemd, no graphics
+- `workstation` — glibc + systemd + e1wm on tty1
 
-### Toolchain / docs
-- e1wine slimmed down: the `convert` subcommand moved entirely to e1wxfly
-- English is now the primary `README.md`; Chinese moved to `README.zh-CN.md`
-- `E1OS_NO_CC=1 ./build.sh` rebuilds images reusing previously compiled
-  binaries when a cross compiler is unavailable
+### Server gains e1pkg
+- `server` now ships the `e1pkg` binary and the same `/etc/e1pkg.conf` as
+  minimal/desktop/mobile (public IPv6 e1repo first, then NAT/LAN/local
+  fallbacks)
+- systemd-networkd + DHCP plus a dedicated oneshot unit load the NIC drivers
+  (e1000/e1000e/virtio_net/af_packet) before networkd starts, so package
+  installs work on a clean boot
+- IPv6 literal URLs are handled safely by the shell (brackets are never
+  treated as glob patterns)
 
-## Download (15 assets)
+### Version / packaging
+- Version bumped to 2.0 everywhere (`os-release`, boot menus, installer,
+  artifact names, docs)
+- x86_64 images are now **dual-boot**: isohybrid BIOS plus UEFI El Torito
+  (GRUB 2.12 standalone `grubx64.efi` embedded in a 16 MiB FAT16 EFI image)
+- aarch64 images (`.img`, GPT + FAT32 ESP, `grubaa64.efi`) ship for
+  minimal/desktop/mobile
+- Tool packages for **e1wine** / **e1wxfly** (macOS zip/dmg/pkg, Linux tar.gz,
+  POSIX self-extracting installer) and full source archives (`.tar.gz`, `.zip`)
 
-**Images** — x86_64 dual BIOS+UEFI hybrid ISOs, aarch64 UEFI raw images:
+## Download
 
-| File | Arch | Variant |
-|---|---|---|
-| e1LibreOS-1.2-{minimal,desktop,mobile}-x86_64.iso | x86_64 | CLI / GUI / touch |
-| e1LibreOS-1.2-{minimal,desktop,mobile}-aarch64.img | aarch64 | CLI / GUI / touch |
-
-(`server` and `workstation` are planned glibc + systemd branches; no images
-are published for them yet.)
-
-**Tools** — e1wine for Linux (x86_64/aarch64, static musl), macOS universal,
-the macOS .app launcher, a generic Unix build, the `e1wxfly` wrapper itself,
-and a sample `hello.exe`.
-
-**Source** — e1LibreOS-1.1-source.tar.gz (signed tag v1.1).
+| File | Arch | Firmware | Variant |
+|---|---|---|---|
+| e1LibreOS-2.0-minimal-x86_64.iso | x86_64 | BIOS + UEFI | CLI |
+| e1LibreOS-2.0-desktop-x86_64.iso | x86_64 | BIOS + UEFI | e1wm desktop |
+| e1LibreOS-2.0-mobile-x86_64.iso | x86_64 | BIOS + UEFI | touch |
+| e1LibreOS-2.0-server-x86_64.iso | x86_64 | BIOS + UEFI | glibc + systemd + e1pkg |
+| e1LibreOS-2.0-workstation-x86_64.iso | x86_64 | BIOS + UEFI | glibc + systemd + e1wm |
+| e1LibreOS-2.0-minimal-aarch64.img | aarch64 | UEFI | CLI |
+| e1LibreOS-2.0-desktop-aarch64.img | aarch64 | UEFI | e1wm desktop |
+| e1LibreOS-2.0-mobile-aarch64.img | aarch64 | UEFI | touch |
+| e1wine-2.0-macos.zip / .dmg / .pkg | - | - | macOS installer |
+| e1wine-2.0-linux.tar.gz | x86_64 + aarch64 | - | static binaries + install.sh |
+| e1wine-2.0-unix-installer.sh | any POSIX | - | self-extracting installer |
+| e1LibreOS-2.0-source.tar.gz / .zip | - | - | full source tree |
 
 SHA-256 checksums are in `SHA256SUMS.txt`.
 
@@ -100,7 +108,7 @@ def main():
         # 标题（GitHub release 表单加载较慢，显式等待）
         title_sel = "input#release_name, input[name='release[name]']"
         page.wait_for_selector(title_sel, timeout=60000)
-        page.fill(title_sel, f"e1LibreOS v1.1")
+        page.fill(title_sel, f"e1LibreOS v2.0")
 
         # 正文
         page.fill("textarea#release_body, textarea[name='release[body]']", NOTES)

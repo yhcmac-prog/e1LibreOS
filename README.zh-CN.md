@@ -2,19 +2,19 @@
 
 **简体中文** | [English](README.md)
 
-e1LibreOS 1.2 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 发行版。
+e1LibreOS 2.0 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 发行版。
 内核与用户态全部来自自由软件，系统镜像可在 macOS / Linux 上纯脚本零 root 交叉构建。
 
 ## 特性一览
 
 - **小而完整**：Alpine `linux-virt` 6.12 内核 + busybox 静态用户态，Live 环境常驻内存（initramfs）
-- **五个构建分支**（`E1OS_VARIANT`），当前三个可直接构建
-  - `minimal`：纯命令行，最小体积 —— **可直接构建**
-  - `desktop`：自研 framebuffer 窗口管理器 **e1wm**（无 X11/Wayland，直写 `/dev/fb0`）—— **可直接构建**
-  - `mobile`：800×600 触屏适配 + 虚拟键盘，复用 e1wm —— **可直接构建**
-  - `server`：glibc + systemd 基础 —— **规划占位，尚未实现**
-  - `workstation`：glibc + systemd + **e1wm** 图形界面 —— **规划占位，尚未实现**
-- **双架构**：x86_64（BIOS + UEFI 双引导 ISO）、aarch64（UEFI 原始 `.img`）
+- **五个构建分支**（`E1OS_VARIANT`），当前全部可直接构建
+  - `minimal`：纯命令行，最小体积（busybox + musl）
+  - `desktop`：自研 framebuffer 窗口管理器 **e1wm**（无 X11/Wayland，直写 `/dev/fb0`）
+  - `mobile`：800×600 触屏适配 + 虚拟键盘，复用 e1wm
+  - `server`：glibc + systemd 基础系统，无图形（Arch Linux bootstrap 根文件系统，systemd 作 PID 1），内置 **e1pkg** 与统一的 `/etc/e1pkg.conf`（公网 IPv6 源优先）
+  - `workstation`：glibc + systemd，内置 **e1wm** 图形界面，由 `e1wm.service` 在 tty1 启动
+- **双架构**：x86_64（isohybrid BIOS + UEFI El Torito 双引导 ISO）、aarch64（UEFI 原始 `.img`，GPT + FAT32 ESP）
 - **自研生态**
   - [e1pkg](rootfs/usr/bin/e1pkg)：dnf 风格包管理器（后序遍历依赖解析 + 反向依赖保护）
   - [e1wine](src/e1wine/e1wine.c)：轻量 Win32 PE 兼容层（运行/分析 PE 文件）
@@ -34,13 +34,28 @@ e1LibreOS 1.2 (Libre) —— 参照 Fedora 理念构建的最小可启动 Linux 
 
 | 文件 | 架构 | 固件 | 说明 |
 |---|---|---|---|
-| `e1LibreOS-1.2-minimal-x86_64.iso` | x86_64 | BIOS+UEFI | 命令行 |
-| `e1LibreOS-1.2-desktop-x86_64.iso` | x86_64 | BIOS+UEFI | e1wm 图形桌面 |
-| `e1LibreOS-1.2-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | 触屏版 |
-| `e1LibreOS-1.2-{minimal,desktop,mobile}-aarch64.img` | aarch64 | UEFI | `dd` 到磁盘/SD 卡 |
+| `e1LibreOS-2.0-minimal-x86_64.iso` | x86_64 | BIOS + UEFI | 命令行 |
+| `e1LibreOS-2.0-desktop-x86_64.iso` | x86_64 | BIOS + UEFI | e1wm 图形桌面 |
+| `e1LibreOS-2.0-mobile-x86_64.iso` | x86_64 | BIOS + UEFI | 触屏版 |
+| `e1LibreOS-2.0-server-x86_64.iso` | x86_64 | BIOS + UEFI | glibc + systemd + e1pkg，无图形 |
+| `e1LibreOS-2.0-workstation-x86_64.iso` | x86_64 | BIOS + UEFI | glibc + systemd + e1wm |
+| `e1LibreOS-2.0-minimal-aarch64.img` | aarch64 | UEFI | 命令行 |
+| `e1LibreOS-2.0-desktop-aarch64.img` | aarch64 | UEFI | e1wm 图形桌面 |
+| `e1LibreOS-2.0-mobile-aarch64.img` | aarch64 | UEFI | 触屏版 |
 
-`server`（glibc + systemd）与 `workstation`（glibc + systemd + e1wm）为规划分支，
-暂不提供镜像下载。
+同时附带工具包与源码包：
+
+| 文件 | 内容 |
+|---|---|
+| `e1wine-2.0-macos.zip` / `.dmg` / `.pkg` | macOS 版 e1wine + e1wxfly 安装包 |
+| `e1wine-2.0-linux.tar.gz` | Linux x86_64 / aarch64 静态二进制 + `install.sh` |
+| `e1wine-2.0-unix-installer.sh` | POSIX 自解压安装器 |
+| `e1LibreOS-2.0-source.tar.gz` / `.zip` | 完整源码树（不含构建产物） |
+
+两条 glibc + systemd 分支目前仅 x86_64：根文件系统是 Arch Linux bootstrap 整树
+直接打进 initramfs，systemd 作为 PID 1 运行（`/init` 先挂载 proc/sys/dev/run，
+再 exec `/usr/lib/systemd/systemd`）。两者都在串口控制台（ttyS0）自动以 root 登录；`server` 的 tty1 同样自动登录，
+`workstation` 则把 tty1 交给 e1wm（tty1 的 getty 被 mask，避免与图形界面抢占）。
 
 ### 虚拟机（VirtualBox）
 
@@ -55,9 +70,9 @@ Live 环境 root 自动登录（无密码）；安装后 root 默认密码见安
 
 ```sh
 # x86_64：ISO 已做 isohybrid，可直接 dd
-sudo dd if=build/e1LibreOS-1.2-desktop-x86_64.iso of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-2.0-desktop-x86_64.iso of=/dev/sdX bs=4M conv=fsync
 # aarch64：原始磁盘镜像
-sudo dd if=build/e1LibreOS-1.2-desktop-aarch64.img of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-2.0-desktop-aarch64.img of=/dev/sdX bs=4M conv=fsync
 ```
 
 ### 安装到硬盘
@@ -78,6 +93,8 @@ setup-e1os --auto /dev/sda   # 非交互，环境变量预置答案
 ./build.sh                                      # x86_64 minimal ISO
 E1OS_VARIANT=desktop ./build.sh                 # x86_64 desktop ISO
 E1OS_VARIANT=mobile ./build.sh                  # x86_64 mobile ISO
+E1OS_VARIANT=server ./build.sh                  # x86_64 glibc + systemd server ISO
+E1OS_VARIANT=workstation ./build.sh             # x86_64 glibc + systemd + e1wm ISO
 E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh   # aarch64 .img
 ```
 
@@ -87,6 +104,7 @@ E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh   # aarch64 .img
 - [docs/INSTALL.md](docs/INSTALL.md)：五种安装模式与 `setup-e1os` 问答说明
 - [docs/E1WINE.md](docs/E1WINE.md)：e1wine 跨平台 EXE 转换工具
 - [docs/e1repo.md](docs/e1repo.md)：e1repo 依赖仓库结构与自建方法
+- [docs/RELEASE-2.0.md](docs/RELEASE-2.0.md)：2.0 版本说明与发布清单
 - [CONTRIBUTING.md](CONTRIBUTING.md)：贡献指南（构建、编码规范、提交流程）
 
 ## 源码结构

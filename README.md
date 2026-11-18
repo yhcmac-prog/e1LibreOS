@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | **English**
 
-e1LibreOS 1.2 (Libre) is a minimal bootable Linux distribution built around the
+e1LibreOS 2.0 (Libre) is a minimal bootable Linux distribution built around the
 Fedora philosophy of free software. Both the kernel and user space come entirely
 from upstream free-software components, and the system images can be
 cross-built on macOS or Linux using plain scripts — no root access required.
@@ -11,17 +11,19 @@ cross-built on macOS or Linux using plain scripts — no root access required.
 
 - **Small yet complete**: Alpine `linux-virt` 6.12 kernel + static busybox user
   space; the Live system runs entirely from memory (initramfs)
-- **Five branches** (`E1OS_VARIANT`), three buildable today
-  - `minimal`: text console only, smallest footprint — **buildable**
+- **Five branches** (`E1OS_VARIANT`), all buildable today
+  - `minimal`: text console only, smallest footprint (busybox + musl)
   - `desktop`: the in-house framebuffer window manager **e1wm** (no
-    X11/Wayland — it renders directly to `/dev/fb0`) — **buildable**
+    X11/Wayland — it renders directly to `/dev/fb0`)
   - `mobile`: 800×600 touchscreen layout with an on-screen keyboard, sharing
-    e1wm — **buildable**
-  - `server`: glibc + systemd base — **planned placeholder, not buildable yet**
-  - `workstation`: glibc + systemd + **e1wm** desktop — **planned placeholder,
-    not buildable yet**
-- **Two architectures**: x86_64 (dual BIOS + UEFI bootable ISO) and
-  aarch64 (UEFI raw `.img`)
+    e1wm
+  - `server`: glibc + systemd base, no graphics (Arch Linux bootstrap rootfs,
+    systemd as PID 1), with **e1pkg** and the shared `/etc/e1pkg.conf`
+    (public IPv6 e1repo first)
+  - `workstation`: glibc + systemd plus the built-in **e1wm** desktop, started
+    by `e1wm.service` on tty1
+- **Two architectures**: x86_64 (isohybrid BIOS + UEFI El Torito ISO) and
+  aarch64 (UEFI raw `.img`, GPT + FAT32 ESP)
 - **In-house ecosystem**
   - [e1pkg](rootfs/usr/bin/e1pkg): dnf-style package manager (post-order
     dependency resolution with reverse-dependency protection)
@@ -46,13 +48,30 @@ Get them from [GitHub Releases](../../releases):
 
 | File | Architecture | Firmware | Notes |
 |---|---|---|---|
-| `e1LibreOS-1.2-minimal-x86_64.iso` | x86_64 | BIOS+UEFI | Command line |
-| `e1LibreOS-1.2-desktop-x86_64.iso` | x86_64 | BIOS+UEFI | e1wm graphical desktop |
-| `e1LibreOS-1.2-mobile-x86_64.iso` | x86_64 | BIOS+UEFI | Touchscreen |
-| `e1LibreOS-1.2-{minimal,desktop,mobile}-aarch64.img` | aarch64 | UEFI | `dd` to disk / SD card |
+| `e1LibreOS-2.0-minimal-x86_64.iso` | x86_64 | BIOS + UEFI | Command line |
+| `e1LibreOS-2.0-desktop-x86_64.iso` | x86_64 | BIOS + UEFI | e1wm graphical desktop |
+| `e1LibreOS-2.0-mobile-x86_64.iso` | x86_64 | BIOS + UEFI | Touchscreen |
+| `e1LibreOS-2.0-server-x86_64.iso` | x86_64 | BIOS + UEFI | glibc + systemd + e1pkg, no graphics |
+| `e1LibreOS-2.0-workstation-x86_64.iso` | x86_64 | BIOS + UEFI | glibc + systemd + e1wm |
+| `e1LibreOS-2.0-minimal-aarch64.img` | aarch64 | UEFI | Command line |
+| `e1LibreOS-2.0-desktop-aarch64.img` | aarch64 | UEFI | e1wm graphical desktop |
+| `e1LibreOS-2.0-mobile-aarch64.img` | aarch64 | UEFI | Touchscreen |
 
-`server` (glibc + systemd) and `workstation` (glibc + systemd + e1wm) are planned
-branches and have no downloadable images yet.
+Tool packages and source archives are attached as well:
+
+| File | Contents |
+|---|---|
+| `e1wine-2.0-macos.zip` / `.dmg` / `.pkg` | macOS e1wine + e1wxfly installer |
+| `e1wine-2.0-linux.tar.gz` | Linux x86_64 / aarch64 static binaries + `install.sh` |
+| `e1wine-2.0-unix-installer.sh` | POSIX self-extracting installer |
+| `e1LibreOS-2.0-source.tar.gz` / `.zip` | full source tree without build artifacts |
+
+The two glibc + systemd branches are x86_64 only: their root filesystem is an
+Arch Linux bootstrap tree packed straight into the initramfs, and systemd runs
+as PID 1 (`/init` mounts proc/sys/dev/run and execs `/usr/lib/systemd/systemd`).
+Both auto-login as root on the serial console (ttyS0) and — on `server` — on
+tty1; `workstation` instead starts e1wm on tty1 (the tty1 getty is masked so it
+does not fight for the console).
 
 ### Virtual machine (VirtualBox)
 
@@ -69,9 +88,9 @@ installer prompts.
 
 ```sh
 # x86_64: the ISO is isohybrid and can be dd'd directly
-sudo dd if=build/e1LibreOS-1.2-desktop-x86_64.iso of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-2.0-desktop-x86_64.iso of=/dev/sdX bs=4M conv=fsync
 # aarch64: raw disk image
-sudo dd if=build/e1LibreOS-1.2-desktop-aarch64.img of=/dev/sdX bs=4M conv=fsync
+sudo dd if=build/e1LibreOS-2.0-desktop-aarch64.img of=/dev/sdX bs=4M conv=fsync
 ```
 
 ### Installing to disk
@@ -93,6 +112,8 @@ x86_64 cross toolchain (zig) is fetched automatically on first build. See
 ./build.sh                                              # x86_64 minimal ISO
 E1OS_VARIANT=desktop ./build.sh                         # x86_64 desktop ISO
 E1OS_VARIANT=mobile ./build.sh                          # x86_64 mobile ISO
+E1OS_VARIANT=server ./build.sh                          # x86_64 glibc + systemd server ISO
+E1OS_VARIANT=workstation ./build.sh                     # x86_64 glibc + systemd + e1wm ISO
 E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh       # aarch64 .img
 ```
 
@@ -105,6 +126,8 @@ E1OS_ARCH=aarch64 E1OS_VARIANT=desktop ./build.sh       # aarch64 .img
 - [docs/E1WINE.md](docs/E1WINE.md): e1wine and e1wxfly cross-platform tools
 - [docs/e1repo.md](docs/e1repo.md): e1repo dependency repository layout and
   how to self-host one
+- [docs/RELEASE-2.0.md](docs/RELEASE-2.0.md): 2.0 release notes and asset
+  checklist
 - [CONTRIBUTING.md](CONTRIBUTING.md): build, coding conventions, and pull
   request workflow
 

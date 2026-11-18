@@ -1,9 +1,9 @@
 NAME="e1LibreOS"
-VERSION="1.2 (Libre)"
+VERSION="2.0 (Libre)"
 ID=e1libreos
-VERSION_ID="1.2"
+VERSION_ID="2.0"
 VERSION_CODENAME="libre"
-PRETTY_NAME="e1LibreOS 1.2 (Libre)"
+PRETTY_NAME="e1LibreOS 2.0 (Libre)"
 ANSI_COLOR="0;34"
 LOGO=fedora-logo-icon
 HOME_URL="https://e1libreos.example.org"

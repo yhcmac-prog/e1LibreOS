@@ -6,7 +6,10 @@ e1repo 是 e1LibreOS 的在线依赖仓库，承担两类职责：
 2. **Alpine apk 镜像目录**：`setup-e1os` 安装系统时经此拉取 apk 包
    （grub、linux-lts、openssh、chrony 等），同时作为 Alpine 公共镜像的本地缓存
 
-公开仓库地址：<https://github.com/yhcmac-prog/e1repo>
+公开仓库（源码）：<https://github.com/yhcmac-prog/e1repo>
+
+公网镜像地址：<http://[2409:8a3c:3464:47b0:d63d:7eff:fe11:f544]/e1repo/>
+（IPv6 字面量，写进配置/命令行时必须用方括号包裹主机部分）
 
 ## 目录结构
 
@@ -58,12 +61,17 @@ e1fetch|1.0|Show system info (depends on cowsay)|cowsay|e1fetch-1.0.e1.tar.gz
 - **setup-e1os**：探测 `$URL/apk/v3.21/main/<arch>/APKINDEX.tar.gz`，
   通过后写入目标系统 `/etc/apk/repositories`（main + community）。
 
-预置主机列表（`E1REPO_HOSTS`）：
+预置主机列表（`E1REPO_HOSTS`，脚本会在其后拼 `/e1repo/...`）：
 
 ```
+http://[2409:8a3c:3464:47b0:d63d:7eff:fe11:f544]   # 公网仓库（IPv6 字面量，方括号包裹）
 http://10.0.2.2:8000        # VirtualBox NAT 网关（VM → 宿主机）
 http://192.168.1.102:8000   # 局域网地址
 ```
+
+`e1pkg` 侧对应的完整 URL 写在 [/etc/e1pkg.conf](../rootfs/etc/e1pkg.conf)，
+公网源为 `http://[2409:8a3c:3464:47b0:d63d:7eff:fe11:f544]/e1repo`；
+纯 IPv4 网络下该源不可达时会自动回退到后面的本地/局域网源。
 
 ## 自建本地 e1repo
 

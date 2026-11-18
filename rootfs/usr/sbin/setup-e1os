@@ -26,7 +26,9 @@ set -e
 export PATH=/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin
 
 # ---------------------------------------------------------------- 全局变量
-E1REPO_HOSTS="${E1REPO_HOSTS:-http://10.0.2.2:8000 http://192.168.1.102:8000}"
+# E1REPO_HOSTS：仓库主机根地址（脚本会在其后拼 /e1repo/...）；
+# IPv6 字面量必须用方括号包裹
+E1REPO_HOSTS="${E1REPO_HOSTS:-http://[2409:8a3c:3464:47b0:d63d:7eff:fe11:f544] http://10.0.2.2:8000 http://192.168.1.102:8000}"
 MIRROR_ALI="http://mirrors.aliyun.com/alpine/v3.21"
 MIRROR_CDN="http://dl-cdn.alpinelinux.org/alpine/v3.21"
 
@@ -231,7 +233,7 @@ if [ "$AUTO" != 1 ]; then
     # ---- 镜像源
     echo ""
     echo "Available apk mirrors:"
-    echo "  1) e1repo dependency repository (local/VirtualBox host, automatic fallback)"
+    echo "  1) e1repo dependency repository (public IPv6 / local / VirtualBox host)"
     echo "  2) mirrors.aliyun.com  (Alpine v3.21)"
     echo "  3) dl-cdn.alpinelinux.org"
     echo "  f) detect fastest"
@@ -322,10 +324,17 @@ probe_repo() {
             if [ -n "$best" ]; then REPOBASE="$best"; REPO_LABEL="fastest:$best"; return 0; fi
             ;;
         *)  # 1 或未设置：e1repo 优先，随后公共镜像兜底
+            # 关闭通配符展开：IPv6 字面量的方括号 [2409:...] 按字面处理，
+            # 不会被 shell 当成文件名通配模式
+            set -f
             for h in $E1REPO_HOSTS; do
                 b="$h/e1repo/apk/v3.21"
-                if probe_base "$b"; then REPOBASE="$b"; REPO_LABEL="e1repo ($h)"; return 0; fi
+                if probe_base "$b"; then
+                    set +f
+                    REPOBASE="$b"; REPO_LABEL="e1repo ($h)"; return 0
+                fi
             done
+            set +f
             ;;
     esac
     # 兜底链（任何选择最终不可达时）
@@ -785,7 +794,7 @@ TIMEOUT 20
 SERIAL 0 115200
 
 LABEL e1libreos
-  MENU LABEL e1LibreOS 1.2 (Libre) $PVN
+  MENU LABEL e1LibreOS 2.0 (Libre) $PVN
   LINUX /boot/$KERN
   INITRD /boot/$INITRD
   APPEND root=$P_ROOT rootfstype=ext4 modules=sd-mod,usb-storage,ext4 $CONSOLES $VGA
@@ -816,7 +825,7 @@ insmod part_gpt
 insmod ext2
 $( [ "$FIRMWARE" = efi ] && echo insmod fat )
 
-menuentry "e1LibreOS 1.2 (Libre) $PVN" {
+menuentry "e1LibreOS 2.0 (Libre) $PVN" {
     $( [ "$FIRMWARE" = efi ] && echo "insmod chain" )
     linux /boot/$KERN root=$P_ROOT rw rootfstype=ext4 $CONSOLES $VGA
     initrd /boot/$INITRD

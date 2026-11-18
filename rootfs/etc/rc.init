@@ -16,7 +16,7 @@ echo -e '      __) | | |_) |  _| | |    \  /   / /  | |_) |'
 echo -e '     |__ <  |  _ <| |___| |___ /  \  / /_  |  _ <'
 echo -e '     |___/  |_| \_\_____|_____/_/\_\/____| |_| \_\033[0m'
 echo ""
-echo -e "\033[1m e1LibreOS 1.0 (Libre)\033[0m — a brand-new, freedom-first minimal Linux distro"
+echo -e "\033[1m e1LibreOS 2.0 (Libre)\033[0m — a brand-new, freedom-first minimal Linux distro"
 echo ""
 
 # ---- Live 环境驱动模块（磁盘/网卡/文件系统/USB 存储）----
@@ -144,4 +144,4 @@ dmesg >/var/log/dmesg.boot 2>/dev/null
 ok "Save boot log to /var/log/dmesg.boot"
 
 echo ""
-echo -e "\033[1m[ e1LibreOS 1.0 (Libre) ] reached target — multi-user\033[0m"
+echo -e "\033[1m[ e1LibreOS 2.0 (Libre) ] reached target — multi-user\033[0m"
