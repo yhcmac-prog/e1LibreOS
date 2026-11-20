@@ -241,7 +241,7 @@ done
 [ -n "$MKISOFS" ] || die "缺少 mkisofs（运行 sh tools/build-host-tools.sh，或 sudo port install cdrtools）"
 [ -f "$DL/isolinux.bin" ] || die "缺少 downloads/isolinux.bin"
 
-msg "生成可启动 ISO（isolinux + El Torito）"
+msg "生成可启动 ISO（BIOS isolinux + UEFI El Torito 双引导）"
 rm -rf "$WORK/isostage"
 mkdir -p "$WORK/isostage/isolinux" "$WORK/isostage/boot"
 cp "$DL/isolinux.bin" "$DL/ldlinux.c32" "$WORK/isostage/isolinux/"
@@ -264,9 +264,64 @@ LABEL linux
   APPEND initrd=/boot/initramfs-e1.gz $KAPPEND
 EOF
 
+# ---- UEFI 双引导：super-floppy FAT16 El Torito EFI 引导镜像 ----
+# downloads/grub/grubx64.efi 是 GRUB 2.12 all-modules 生成的 standalone EFI，
+# 内嵌 search/menuentry/linux/initrd 启动配置，search 光盘卷上的 /boot/vmlinuz-virt。
+# super-floppy 布局：FAT 文件系统从扇区 0 开始，MBR 只有一个起始 LBA=0 的
+# 覆盖分区。固件将 El Torito EFI 项映射为 RAM 盘后直接挂载，FAT 必须位于 LBA0。
+EFI_ARGS=""
+GRUB_BIN="$DL/grub/grubx64.efi"
+if [ -f "$GRUB_BIN" ]; then
+    msg "生成 UEFI El Torito 引导镜像 (super-floppy FAT16 + $(basename "$GRUB_BIN"))"
+    EFI_STAGE="$WORK/efistage"
+    rm -rf "$EFI_STAGE"; mkdir -p "$EFI_STAGE/EFI/BOOT" "$EFI_STAGE/boot/grub"
+    cp "$GRUB_BIN" "$EFI_STAGE/EFI/BOOT/BOOTX64.EFI"
+    cat > "$EFI_STAGE/EFI/BOOT/GRUB.CFG" <<EOF
+set timeout=2
+set default=0
+search --no-floppy --file /boot/vmlinuz-virt --set=root || search --no-floppy --file /EFI/BOOT/BOOTX64.EFI --set=root
+
+menuentry "e1LibreOS $VER (Libre) $VN — Live" {
+    linux /boot/vmlinuz-virt $KAPPEND
+    initrd /boot/initramfs-e1.gz
+}
+EOF
+    cp "$EFI_STAGE/EFI/BOOT/GRUB.CFG" "$EFI_STAGE/boot/grub/GRUB.CFG"
+    mkdir -p "$WORK/isostage/boot"
+    # 16MiB：簇数 8167 ≥ 4085，才是合规 FAT16（4MiB 卷只有 ~2000 簇，
+    # 固件按簇数判定为 FAT12，簇链解析失败导致 Bds 报 Not Found）
+    python3 "$ROOT/tools/mkfat32.py" "$EFI_STAGE" "$WORK/isostage/boot/efi.img" \
+        --size-mb 16 --fstype 16 --hidden 0 --label E1OS_EFI
+    # 补写 super-floppy MBR 分区项：active + 类型0x06(FAT16) + 起始0 + 全镜像
+    python3 - "$WORK/isostage/boot/efi.img" <<'PY'
+import sys, struct
+p = sys.argv[1]
+with open(p, "r+b") as f:
+    f.seek(0, 2); nsec = f.tell() // 512
+    f.seek(446)
+    pe = bytes([0x80, 0x00, 0x01, 0x00, 0x06, 0xFE, 0xFF, 0xFF])
+    pe += struct.pack("<I", 0) + struct.pack("<I", nsec)
+    f.write(pe)
+    f.seek(510); f.write(b"\x55\xAA")
+print(f"super-floppy EFI 镜像: {nsec*512//1048576} MiB, FAT16@LBA0")
+PY
+    # 另在 ISO9660 树放一份引导程序与配置：支持直接解析光盘文件系统
+    # 的固件，同时覆盖 grub 内嵌 prefix=/boot/grub 的查找路径
+    mkdir -p "$WORK/isostage/EFI/BOOT" "$WORK/isostage/boot/grub"
+    cp "$GRUB_BIN" "$WORK/isostage/EFI/BOOT/BOOTX64.EFI"
+    cp "$EFI_STAGE/EFI/BOOT/GRUB.CFG" "$WORK/isostage/EFI/BOOT/GRUB.CFG"
+    cp "$EFI_STAGE/EFI/BOOT/GRUB.CFG" "$WORK/isostage/EFI/BOOT/grub.cfg"
+    cp "$EFI_STAGE/EFI/BOOT/GRUB.CFG" "$WORK/isostage/boot/grub/grub.cfg"
+    rm -rf "$EFI_STAGE"
+    EFI_ARGS="-eltorito-alt-boot -eltorito-platform 0xEF -eltorito-boot boot/efi.img -no-emul-boot"
+else
+    msg "缺少 $GRUB_BIN，ISO 将仅支持 BIOS"
+fi
+
 "$MKISOFS" -quiet -o "$BUILD/e1LibreOS-$VER-$VARIANT-x86_64.iso" \
     -b isolinux/isolinux.bin -c isolinux/boot.cat \
     -no-emul-boot -boot-load-size 4 -boot-info-table \
+    $EFI_ARGS \
     -J -R -V "e1LibreOS_${VER}_${VN}" "$WORK/isostage"
 python3 "$ROOT/tools/isohybrid.py" "$BUILD/e1LibreOS-$VER-$VARIANT-x86_64.iso" \
     "$DL/isohdpfx.bin" || true
