@@ -269,8 +269,11 @@ EOF
 # 内嵌 search/menuentry/linux/initrd 启动配置，search 光盘卷上的 /boot/vmlinuz-virt。
 # super-floppy 布局：FAT 文件系统从扇区 0 开始，MBR 只有一个起始 LBA=0 的
 # 覆盖分区。固件将 El Torito EFI 项映射为 RAM 盘后直接挂载，FAT 必须位于 LBA0。
+# 查找顺序与 build.sh 一致：E1OS_GRUB_BIN → grubx64-alpine.efi → grubx64.efi，
+# 否则只有 grubx64-alpine.efi 的构建机会静默掉回"仅 BIOS"。
 EFI_ARGS=""
-GRUB_BIN="$DL/grub/grubx64.efi"
+GRUB_BIN="${E1OS_GRUB_BIN:-$DL/grub/grubx64-alpine.efi}"
+[ -f "$GRUB_BIN" ] || GRUB_BIN="$DL/grub/grubx64.efi"
 if [ -f "$GRUB_BIN" ]; then
     msg "生成 UEFI El Torito 引导镜像 (super-floppy FAT16 + $(basename "$GRUB_BIN"))"
     EFI_STAGE="$WORK/efistage"
